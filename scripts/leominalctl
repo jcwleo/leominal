@@ -1,0 +1,486 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+APP_DIR="${LEOMINAL_APP_DIR:-$DEFAULT_APP_DIR}"
+ENV_FILE="${LEOMINAL_ENV_FILE:-$APP_DIR/.env}"
+
+COMMAND="${1:-help}"
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+
+die() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+info() {
+  echo "$*"
+}
+
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+strip_quotes() {
+  local value="$1"
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    value="${value:1:${#value}-2}"
+  elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+  printf '%s' "$value"
+}
+
+load_env_file() {
+  [[ -f "$ENV_FILE" ]] || return 0
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="$(trim "$line")"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    [[ "$line" == export\ * ]] && line="$(trim "${line#export }")"
+    [[ "$line" == *=* ]] || continue
+    key="$(trim "${line%%=*}")"
+    value="$(strip_quotes "$(trim "${line#*=}")")"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    if [[ -z "${!key+x}" ]]; then
+      export "$key=$value"
+    fi
+  done < "$ENV_FILE"
+}
+
+resolve_path() {
+  local value="$1"
+  if [[ "$value" == /* ]]; then
+    printf '%s' "$value"
+  else
+    printf '%s/%s' "$APP_DIR" "$value"
+  fi
+}
+
+load_env_file
+
+HOST="${LEOMINAL_HOST:-127.0.0.1}"
+PORT="${LEOMINAL_PORT:-3107}"
+NODE_BIN="${LEOMINAL_NODE_BIN:-node}"
+NPM_BIN="${LEOMINAL_NPM_BIN:-npm}"
+PID_PATH="$(resolve_path "${LEOMINAL_PID_PATH:-.leominal/leominal.pid}")"
+LOG_PATH="$(resolve_path "${LEOMINAL_LOG_PATH:-.leominal/leominal.log}")"
+HEALTH_TIMEOUT_SECONDS="${LEOMINAL_HEALTH_TIMEOUT_SECONDS:-15}"
+STOP_TIMEOUT_SECONDS="${LEOMINAL_STOP_TIMEOUT_SECONDS:-20}"
+RUNTIME_ENTRY="$APP_DIR/dist/server/index.js"
+LAUNCHD_LABEL="${LEOMINAL_LAUNCHD_LABEL:-com.leominal.local}"
+
+health_url() {
+  printf 'http://%s:%s/api/auth/session' "$HOST" "$PORT"
+}
+
+public_url() {
+  printf 'http://%s:%s' "$HOST" "$PORT"
+}
+
+ensure_app_dir() {
+  [[ -d "$APP_DIR" ]] || die "app directory not found: $APP_DIR"
+}
+
+ensure_env_file() {
+  [[ -f "$ENV_FILE" ]] || die ".env not found at $ENV_FILE; copy .env.example and run npm run generate:secrets"
+}
+
+ensure_runtime() {
+  [[ -f "$RUNTIME_ENTRY" ]] || die "dist/server/index.js not found; run scripts/leominalctl build first"
+}
+
+ensure_directories() {
+  mkdir -p "$(dirname "$PID_PATH")" "$(dirname "$LOG_PATH")"
+  : >> "$LOG_PATH"
+  chmod 600 "$LOG_PATH" 2>/dev/null || true
+}
+
+validate_required_env() {
+  local missing=0
+  for key in LEOMINAL_SESSION_SECRET; do
+    local value="${!key:-}"
+    if [[ -z "$value" || "$value" == replace-with-generate-secrets-output ]]; then
+      echo "missing or placeholder env: $key"
+      missing=1
+    fi
+  done
+  return "$missing"
+}
+
+read_pid() {
+  [[ -f "$PID_PATH" ]] || return 1
+  local pid
+  pid="$(tr -d '[:space:]' < "$PID_PATH")"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$pid"
+}
+
+is_running() {
+  local pid="$1"
+  kill -0 "$pid" 2>/dev/null
+}
+
+current_pid() {
+  local pid
+  pid="$(read_pid || true)"
+  if [[ -n "$pid" && "$(is_running "$pid" && echo yes || echo no)" == yes ]]; then
+    printf '%s' "$pid"
+    return 0
+  fi
+  return 1
+}
+
+launchd_domain() {
+  [[ -n "$LAUNCHD_LABEL" ]] || return 1
+  printf 'gui/%s/%s' "$(id -u)" "$LAUNCHD_LABEL"
+}
+
+launchd_print() {
+  command -v launchctl >/dev/null 2>&1 || return 1
+  local domain
+  domain="$(launchd_domain)" || return 1
+  launchctl print "$domain" 2>/dev/null
+}
+
+launchd_controls_app() {
+  local output
+  output="$(launchd_print || true)"
+  [[ -n "$output" ]] || return 1
+  case "$output" in
+    *"working directory = $APP_DIR"*|*"cd $APP_DIR "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+remove_stale_pid() {
+  local pid
+  pid="$(read_pid || true)"
+  if [[ -n "$pid" && ! "$(is_running "$pid" && echo yes || echo no)" == yes ]]; then
+    rm -f "$PID_PATH"
+  fi
+}
+
+node_health_check() {
+  "$NODE_BIN" -e '
+const http = require("node:http");
+const url = process.argv[1];
+const request = http.get(url, { timeout: 1000 }, (response) => {
+  response.resume();
+  process.exit(response.statusCode && response.statusCode >= 200 && response.statusCode < 500 ? 0 : 1);
+});
+request.on("timeout", () => request.destroy());
+request.on("error", () => process.exit(1));
+' "$(health_url)" >/dev/null 2>&1
+}
+
+start_daemon() {
+  cd "$APP_DIR"
+  if command -v setsid >/dev/null 2>&1; then
+    nohup setsid "$NODE_BIN" "$RUNTIME_ENTRY" >> "$LOG_PATH" 2>&1 &
+  else
+    nohup "$NODE_BIN" "$RUNTIME_ENTRY" >> "$LOG_PATH" 2>&1 &
+  fi
+  local pid="$!"
+  disown "$pid" 2>/dev/null || true
+  echo "$pid" > "$PID_PATH"
+}
+
+start_launchd() {
+  local domain
+  domain="$(launchd_domain)" || return 1
+  launchctl kickstart -k "$domain"
+
+  local pid
+  local deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
+  while (( SECONDS <= deadline )); do
+    pid="$(current_pid || true)"
+    if [[ -n "$pid" ]] && wait_for_health "$pid"; then
+      info "Leominal started via launchd pid=$pid url=$(public_url) log=$LOG_PATH"
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  echo "Leominal failed to become healthy via launchd. Last log lines:" >&2
+  tail -n 40 "$LOG_PATH" >&2 || true
+  return 1
+}
+
+wait_for_health() {
+  local pid="$1"
+  local deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
+  while (( SECONDS <= deadline )); do
+    if ! is_running "$pid"; then
+      return 1
+    fi
+    if node_health_check; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+port_owner_pid() {
+  command -v lsof >/dev/null 2>&1 || return 1
+  lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -n 1
+}
+
+assert_port_available() {
+  local owner
+  owner="$(port_owner_pid || true)"
+  [[ -z "$owner" ]] && return 0
+  local pid
+  pid="$(current_pid || true)"
+  [[ -n "$pid" && "$owner" == "$pid" ]] && return 0
+  die "port $PORT is already in use by pid $owner"
+}
+
+cmd_status() {
+  remove_stale_pid
+  local pid
+  pid="$(current_pid || true)"
+  if [[ -n "$pid" ]]; then
+    info "Leominal running pid=$pid url=$(public_url) log=$LOG_PATH"
+    return 0
+  fi
+  info "Leominal stopped pid_file=$PID_PATH"
+  return 3
+}
+
+cmd_start() {
+  ensure_app_dir
+  ensure_env_file
+  ensure_runtime
+  validate_required_env || die "generate real secrets before starting"
+  ensure_directories
+  remove_stale_pid
+
+  local pid
+  pid="$(current_pid || true)"
+  if [[ -n "$pid" ]]; then
+    info "Leominal already running pid=$pid url=$(public_url)"
+    return 0
+  fi
+
+  if launchd_controls_app; then
+    start_launchd
+    return 0
+  fi
+
+  assert_port_available
+  start_daemon
+  chmod 600 "$PID_PATH" 2>/dev/null || true
+  pid="$(read_pid)"
+
+  if wait_for_health "$pid"; then
+    info "Leominal started pid=$pid url=$(public_url) log=$LOG_PATH"
+    return 0
+  fi
+
+  local exit_hint="failed to become healthy"
+  if ! is_running "$pid"; then
+    exit_hint="process exited during startup"
+  fi
+  rm -f "$PID_PATH"
+  echo "Leominal $exit_hint. Last log lines:" >&2
+  tail -n 40 "$LOG_PATH" >&2 || true
+  return 1
+}
+
+cmd_stop() {
+  remove_stale_pid
+  local pid
+  pid="$(current_pid || true)"
+  if [[ -z "$pid" ]]; then
+    info "Leominal already stopped"
+    return 0
+  fi
+
+  kill -TERM "$pid" 2>/dev/null || true
+  local deadline=$((SECONDS + STOP_TIMEOUT_SECONDS))
+  while (( SECONDS <= deadline )); do
+    if ! is_running "$pid"; then
+      rm -f "$PID_PATH"
+      info "Leominal stopped pid=$pid"
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  kill -KILL "$pid" 2>/dev/null || true
+  rm -f "$PID_PATH"
+  info "Leominal force-stopped pid=$pid"
+}
+
+cmd_restart() {
+  if launchd_controls_app; then
+    start_launchd
+  else
+    cmd_stop >/dev/null
+    cmd_start
+  fi
+  info "Leominal restarted"
+}
+
+cmd_build() {
+  ensure_app_dir
+  (
+    cd "$APP_DIR"
+    "$NPM_BIN" run build
+  )
+}
+
+cmd_deploy() {
+  ensure_app_dir
+  ensure_env_file
+  (
+    cd "$APP_DIR"
+    if [[ -f package-lock.json ]]; then
+      "$NPM_BIN" ci
+    else
+      "$NPM_BIN" install
+    fi
+    "$NPM_BIN" run typecheck
+    "$NPM_BIN" rebuild node-pty --build-from-source
+    "$NPM_BIN" run build
+  )
+  cmd_restart
+}
+
+cmd_logs() {
+  local follow=0
+  local lines=100
+  if [[ "${1:-}" == "-f" || "${1:-}" == "follow" ]]; then
+    follow=1
+    shift || true
+  fi
+  if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+    lines="$1"
+  fi
+  [[ -f "$LOG_PATH" ]] || die "log file not found: $LOG_PATH"
+  if (( follow == 1 )); then
+    tail -n "$lines" -f "$LOG_PATH"
+  else
+    tail -n "$lines" "$LOG_PATH"
+  fi
+}
+
+cmd_pid() {
+  local pid
+  pid="$(current_pid || true)"
+  [[ -n "$pid" ]] || return 3
+  echo "$pid"
+}
+
+cmd_doctor() {
+  local failed=0
+  ensure_app_dir
+
+  if command -v "$NODE_BIN" >/dev/null 2>&1; then
+    local node_major
+    node_major="$("$NODE_BIN" -p 'Number(process.versions.node.split(".")[0])')"
+    if (( node_major < 22 )); then
+      echo "fail node: version must be >=22"
+      failed=1
+    else
+      echo "ok node: $("$NODE_BIN" --version)"
+    fi
+  else
+    echo "fail node: command not found: $NODE_BIN"
+    failed=1
+  fi
+
+  if command -v "$NPM_BIN" >/dev/null 2>&1; then
+    echo "ok npm: $("$NPM_BIN" --version)"
+  else
+    echo "fail npm: command not found: $NPM_BIN"
+    failed=1
+  fi
+
+  if [[ -f "$ENV_FILE" ]]; then
+    echo "ok env: $ENV_FILE"
+    validate_required_env || failed=1
+  else
+    echo "fail env: .env not found at $ENV_FILE"
+    failed=1
+  fi
+
+  if [[ -f "$RUNTIME_ENTRY" ]]; then
+    echo "ok runtime: dist/server/index.js"
+  else
+    echo "fail runtime: dist/server/index.js not found"
+    failed=1
+  fi
+
+  ensure_directories
+  if [[ -w "$(dirname "$PID_PATH")" && -w "$(dirname "$LOG_PATH")" ]]; then
+    echo "ok writable: pid/log directories"
+  else
+    echo "fail writable: pid/log directories"
+    failed=1
+  fi
+
+  local pid owner
+  pid="$(current_pid || true)"
+  owner="$(port_owner_pid || true)"
+  if [[ -z "$owner" || -n "$pid" && "$owner" == "$pid" ]]; then
+    echo "ok port: $PORT"
+  else
+    echo "fail port: $PORT owned by pid $owner"
+    failed=1
+  fi
+
+  return "$failed"
+}
+
+cmd_help() {
+  cat <<EOF
+Usage: scripts/leominalctl <command>
+
+Commands:
+  status         Show process status. Exit 0 when running, 3 when stopped.
+  start          Start the built server in the background.
+  stop           Stop the managed server with SIGTERM, then SIGKILL after timeout.
+  restart        Stop and start the server.
+  build          Run npm run build.
+  deploy         npm ci/install, build, then restart.
+  logs [N]       Show the last N log lines. Default: 100.
+  logs -f [N]    Follow logs.
+  doctor         Check Node/npm/env/runtime/pid/log/port readiness.
+  pid            Print the running PID. Exit 3 when stopped.
+  url            Print the configured local URL.
+  help           Show this help.
+
+Environment:
+  LEOMINAL_APP_DIR                  Override app directory.
+  LEOMINAL_ENV_FILE                 Override .env path.
+  LEOMINAL_PID_PATH                 Default .leominal/leominal.pid.
+  LEOMINAL_LOG_PATH                 Default .leominal/leominal.log.
+  LEOMINAL_HEALTH_TIMEOUT_SECONDS   Default 15.
+  LEOMINAL_STOP_TIMEOUT_SECONDS     Default 20.
+  LEOMINAL_LAUNCHD_LABEL            Default com.leominal.local. Used when a loaded LaunchAgent controls this app.
+EOF
+}
+
+case "$COMMAND" in
+  status) cmd_status "$@" ;;
+  start) cmd_start "$@" ;;
+  stop) cmd_stop "$@" ;;
+  restart|reload) cmd_restart "$@" ;;
+  build) cmd_build "$@" ;;
+  deploy) cmd_deploy "$@" ;;
+  logs|log) cmd_logs "$@" ;;
+  doctor) cmd_doctor "$@" ;;
+  pid) cmd_pid "$@" ;;
+  url) public_url ;;
+  help|-h|--help) cmd_help ;;
+  *) cmd_help >&2; die "unknown command: $COMMAND" ;;
+esac
