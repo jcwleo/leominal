@@ -7,6 +7,8 @@ import { createTerminalWebSocketUrl } from '../api/client.js';
 import { terminalFontFamily, terminalFontSize, waitForTerminalFonts } from './fontStack.js';
 import { HangulInputComposer } from './hangulInput.js';
 
+const terminalFitSettleDelaysMs = [0, 50, 150, 350] as const;
+
 interface XtermPaneProps {
   terminal: TerminalSummary;
   active: boolean;
@@ -23,7 +25,7 @@ export function XtermPane({ terminal, active, onSelect, onExit, onSnapshot }: Xt
   const callbacksRef = useRef({ onExit, onSnapshot });
   const reconnectEnabledRef = useRef(terminal.status === 'running');
   const lastReportedSizeRef = useRef<{ cols: number; rows: number } | null>(null);
-  const pendingFitTimerRef = useRef<number | null>(null);
+  const pendingFitTimersRef = useRef<Map<number, number>>(new Map());
   const [, setConnectionStatus] = useState<'connecting' | 'connected' | 'reconnecting' | 'closed'>('connecting');
 
   useEffect(() => {
@@ -94,7 +96,7 @@ export function XtermPane({ terminal, active, onSelect, onExit, onSnapshot }: Xt
         scheduleFitAndReportSize();
       });
       resizeObserver.observe(container);
-      scheduleFitAndReportSize(0);
+      scheduleSettledFitAndReportSize();
     });
 
     return () => {
@@ -122,7 +124,7 @@ export function XtermPane({ terminal, active, onSelect, onExit, onSnapshot }: Xt
 
       socket.addEventListener('open', () => {
         setConnectionStatus('connected');
-        scheduleFitAndReportSize(0);
+        scheduleSettledFitAndReportSize();
       });
 
       socket.addEventListener('message', (event) => {
@@ -168,15 +170,33 @@ export function XtermPane({ terminal, active, onSelect, onExit, onSnapshot }: Xt
   }, [terminal.id]);
 
   useEffect(() => {
+    const visualViewport = window.visualViewport;
+
     function handleVisibilityChange() {
       if (document.visibilityState === 'visible') {
-        scheduleFitAndReportSize(0);
+        scheduleSettledFitAndReportSize();
       }
     }
 
+    function handlePageShow() {
+      scheduleSettledFitAndReportSize();
+    }
+
+    function handleViewportChange() {
+      scheduleSettledFitAndReportSize();
+    }
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pageshow', handlePageShow);
+    window.addEventListener('resize', handleViewportChange);
+    visualViewport?.addEventListener('resize', handleViewportChange);
+    visualViewport?.addEventListener('scroll', handleViewportChange);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pageshow', handlePageShow);
+      window.removeEventListener('resize', handleViewportChange);
+      visualViewport?.removeEventListener('resize', handleViewportChange);
+      visualViewport?.removeEventListener('scroll', handleViewportChange);
     };
   }, [terminal.id]);
 
@@ -187,10 +207,12 @@ export function XtermPane({ terminal, active, onSelect, onExit, onSnapshot }: Xt
       if (!xterm) {
         return;
       }
+      scheduleSettledFitAndReportSize();
       xterm.clear();
       for (const chunk of message.output) {
         xterm.write(chunk);
       }
+      scheduleSettledFitAndReportSize();
       return;
     }
 
@@ -226,20 +248,27 @@ export function XtermPane({ terminal, active, onSelect, onExit, onSnapshot }: Xt
     if (document.visibilityState === 'hidden') {
       return;
     }
-    if (pendingFitTimerRef.current !== null) {
+    if (pendingFitTimersRef.current.has(delayMs)) {
       return;
     }
-    pendingFitTimerRef.current = window.setTimeout(() => {
-      pendingFitTimerRef.current = null;
+    const timer = window.setTimeout(() => {
+      pendingFitTimersRef.current.delete(delayMs);
       fitAndReportSize();
     }, delayMs);
+    pendingFitTimersRef.current.set(delayMs, timer);
+  }
+
+  function scheduleSettledFitAndReportSize() {
+    for (const delayMs of terminalFitSettleDelaysMs) {
+      scheduleFitAndReportSize(delayMs);
+    }
   }
 
   function clearScheduledFit() {
-    if (pendingFitTimerRef.current !== null) {
-      window.clearTimeout(pendingFitTimerRef.current);
-      pendingFitTimerRef.current = null;
+    for (const timer of pendingFitTimersRef.current.values()) {
+      window.clearTimeout(timer);
     }
+    pendingFitTimersRef.current.clear();
   }
 
   function fitAndReportSize() {
@@ -253,6 +282,7 @@ export function XtermPane({ terminal, active, onSelect, onExit, onSnapshot }: Xt
     }
     try {
       fit.fit();
+      xterm.refresh(0, Math.max(0, xterm.rows - 1));
       const size = { cols: xterm.cols, rows: xterm.rows };
       const previousSize = lastReportedSizeRef.current;
       if (previousSize && previousSize.cols === size.cols && previousSize.rows === size.rows) {

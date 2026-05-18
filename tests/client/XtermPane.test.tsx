@@ -13,6 +13,7 @@ const xtermMocks = vi.hoisted(() => ({
     clear: ReturnType<typeof vi.fn>;
     write: ReturnType<typeof vi.fn>;
     writeln: ReturnType<typeof vi.fn>;
+    refresh: ReturnType<typeof vi.fn>;
     dispose: ReturnType<typeof vi.fn>;
   }>,
   nextSize: { cols: 120, rows: 34 }
@@ -27,6 +28,7 @@ vi.mock('@xterm/xterm', () => ({
     clear = vi.fn();
     write = vi.fn();
     writeln = vi.fn();
+    refresh = vi.fn();
     dispose = vi.fn();
 
     constructor(options: Record<string, unknown>) {
@@ -232,5 +234,26 @@ describe('XtermPane', () => {
     document.dispatchEvent(new Event('visibilitychange'));
 
     await waitFor(() => expect(resizeMessages([socket])).toEqual([{ type: 'resize', terminalId: 'term-alpha', cols: 120, rows: 34 }]));
+  });
+
+  it('reports the settled size after the visible document layout stabilizes late', async () => {
+    renderPane();
+    const socket = await openSocketAfterXtermReady();
+
+    await waitFor(() =>
+      expect(resizeMessages([socket])).toEqual([{ type: 'resize', terminalId: 'term-alpha', cols: 120, rows: 34 }])
+    );
+
+    setVisibility('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    setVisibility('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.setTimeout(() => {
+      xtermMocks.nextSize = { cols: 96, rows: 27 };
+    }, 5);
+
+    await waitFor(() =>
+      expect(resizeMessages([socket])).toContainEqual({ type: 'resize', terminalId: 'term-alpha', cols: 96, rows: 27 })
+    );
   });
 });

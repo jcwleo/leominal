@@ -54,4 +54,15 @@ describe('client viewport height sync', () => {
 
     expect(document.documentElement.style.getPropertyValue(viewportHeightProperty)).toBe('692px');
   });
+
+  it('refreshes the visible viewport height when the page is shown again', async () => {
+    await import('../../src/client/main.js');
+
+    expect(document.documentElement.style.getPropertyValue(viewportHeightProperty)).toBe('744px');
+
+    visualViewportHeight = 681;
+    window.dispatchEvent(new Event('pageshow'));
+
+    expect(document.documentElement.style.getPropertyValue(viewportHeightProperty)).toBe('681px');
+  });
 });

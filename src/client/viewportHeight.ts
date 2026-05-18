@@ -16,12 +16,16 @@ export function installViewportHeightSync(win: Window = window): () => void {
   visualViewport?.addEventListener('scroll', syncHeight);
   win.addEventListener('resize', syncHeight);
   win.addEventListener('orientationchange', syncHeight);
+  win.addEventListener('pageshow', syncHeight);
+  win.document.addEventListener('visibilitychange', syncHeight);
 
   return () => {
     visualViewport?.removeEventListener('resize', syncHeight);
     visualViewport?.removeEventListener('scroll', syncHeight);
     win.removeEventListener('resize', syncHeight);
     win.removeEventListener('orientationchange', syncHeight);
+    win.removeEventListener('pageshow', syncHeight);
+    win.document.removeEventListener('visibilitychange', syncHeight);
     root.style.removeProperty(leominalViewportHeightProperty);
   };
 }

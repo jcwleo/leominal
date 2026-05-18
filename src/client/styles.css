@@ -576,10 +576,7 @@ h1 {
   padding: 3px;
 }
 
-.xterm,
-.xterm-viewport,
-.xterm-screen,
-.xterm-rows {
+.xterm {
   width: 100%;
   height: 100%;
 }
