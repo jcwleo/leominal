@@ -6,6 +6,13 @@ import { LeominalMark } from './LeominalMark.js';
 import { SplitPane } from './SplitPane.js';
 import { TerminalTabs } from './TerminalTabs.js';
 import {
+  getDirectionalPaneTarget,
+  getNextPaneTarget,
+  getPaneTargetByIndex,
+  getPreviousPaneTarget,
+  type PaneNavigationDirection
+} from './paneNavigation.js';
+import {
   createEmptyTerminalState,
   listTabTerminalIds,
   listWorkspaceTerminalIds,
@@ -247,6 +254,40 @@ export function TerminalWorkspace({
     dispatch(action);
   }
 
+  function handleWorkspaceKeyDown(event: React.KeyboardEvent<HTMLElement>) {
+    if (event.nativeEvent.isComposing || event.key === 'Process' || isEditableShortcutTarget(event.target)) {
+      return;
+    }
+
+    const shortcut = parseWorkspaceShortcut(event);
+    if (!shortcut) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (shortcut.type === 'workspace.index') {
+      const workspace = stateRef.current.workspaces[shortcut.index - 1];
+      if (workspace) {
+        dispatchLayoutChange({ type: 'workspace.selected', workspaceId: workspace.id });
+      }
+      return;
+    }
+
+    const currentState = stateRef.current;
+    const workspace = currentState.workspaces.find((candidate) => candidate.id === currentState.activeWorkspaceId) ?? currentState.workspaces[0];
+    const tab = workspace?.tabs.find((candidate) => candidate.id === workspace.activeTabId) ?? workspace?.tabs[0];
+    if (!tab) {
+      return;
+    }
+
+    const targetTerminalId = paneTargetForShortcut(tab.root, tab.activeTerminalId, shortcut);
+    if (targetTerminalId) {
+      dispatchLayoutChange({ type: 'pane.selected', terminalId: targetTerminalId });
+    }
+  }
+
   function queueLayoutSave(layout: TerminalLayoutState) {
     pendingLayoutSaveRef.current = layout;
     writeSavedLayout(layout);
@@ -328,7 +369,7 @@ export function TerminalWorkspace({
   const showSidebarDetails = !sidebarCollapsed || sidebarOpen;
 
   return (
-    <main className="terminal-shell" data-collapsed={sidebarCollapsed} data-sidebar-open={sidebarOpen}>
+    <main className="terminal-shell" data-collapsed={sidebarCollapsed} data-sidebar-open={sidebarOpen} onKeyDownCapture={handleWorkspaceKeyDown}>
       <button type="button" className="workspace-backdrop" aria-label="Close workspaces" onClick={() => setSidebarOpen(false)} />
       <aside className="workspace-sidebar">
         <header className="workspace-brand">
@@ -504,6 +545,92 @@ export function TerminalWorkspace({
       </section>
     </main>
   );
+}
+
+type WorkspaceShortcut =
+  | { type: 'pane.direction'; direction: PaneNavigationDirection }
+  | { type: 'pane.previous' }
+  | { type: 'pane.next' }
+  | { type: 'pane.index'; index: number }
+  | { type: 'workspace.index'; index: number };
+
+function parseWorkspaceShortcut(event: React.KeyboardEvent<HTMLElement>): WorkspaceShortcut | null {
+  const digit = digitKey(event.key);
+  if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && digit !== null) {
+    return { type: 'workspace.index', index: digit };
+  }
+
+  if (!event.metaKey || event.ctrlKey || event.shiftKey) {
+    return null;
+  }
+
+  if (event.altKey) {
+    const direction = arrowDirection(event.key);
+    return direction ? { type: 'pane.direction', direction } : null;
+  }
+
+  if (event.key === '[') {
+    return { type: 'pane.previous' };
+  }
+  if (event.key === ']') {
+    return { type: 'pane.next' };
+  }
+  if (digit !== null) {
+    return { type: 'pane.index', index: digit };
+  }
+  return null;
+}
+
+function paneTargetForShortcut(
+  root: TerminalTabLayout['root'],
+  activeTerminalId: TerminalId,
+  shortcut: Exclude<WorkspaceShortcut, { type: 'workspace.index' }>
+): TerminalId | null {
+  switch (shortcut.type) {
+    case 'pane.direction':
+      return getDirectionalPaneTarget(root, activeTerminalId, shortcut.direction);
+    case 'pane.previous':
+      return getPreviousPaneTarget(root, activeTerminalId);
+    case 'pane.next':
+      return getNextPaneTarget(root, activeTerminalId);
+    case 'pane.index':
+      return getPaneTargetByIndex(root, shortcut.index);
+    default:
+      return null;
+  }
+}
+
+function arrowDirection(key: string): PaneNavigationDirection | null {
+  switch (key) {
+    case 'ArrowLeft':
+      return 'left';
+    case 'ArrowRight':
+      return 'right';
+    case 'ArrowUp':
+      return 'up';
+    case 'ArrowDown':
+      return 'down';
+    default:
+      return null;
+  }
+}
+
+function digitKey(key: string): number | null {
+  return /^[1-9]$/.test(key) ? Number(key) : null;
+}
+
+function isEditableShortcutTarget(target: EventTarget): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.closest('.xterm')) {
+    return false;
+  }
+  if (target.closest('input, textarea, select, [role="textbox"]')) {
+    return true;
+  }
+  const editable = target.closest('[contenteditable]');
+  return editable instanceof HTMLElement && editable.getAttribute('contenteditable')?.toLowerCase() !== 'false';
 }
 
 function EmptyWorkspace({ onCreate }: { onCreate: () => void }) {

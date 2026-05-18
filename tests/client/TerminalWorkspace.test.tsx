@@ -303,6 +303,122 @@ describe('TerminalWorkspace', () => {
     expect(api.saveTerminalLayout).not.toHaveBeenCalled();
   });
 
+  it('selects panes from keyboard shortcuts without bubbling handled key events', async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha'), terminal('term-beta', 'Beta')]);
+    vi.mocked(api.getTerminalLayout).mockResolvedValue(serverLayout(splitLayout(), 4));
+    const bubbled = vi.fn();
+    document.addEventListener('keydown', bubbled);
+
+    try {
+      render(<TerminalWorkspace api={api} />);
+
+      const shell = await screen.findByRole('main');
+      expect(screen.getByText('Beta')).toBeVisible();
+
+      const paneNumber = new KeyboardEvent('keydown', {
+        key: '1',
+        metaKey: true,
+        bubbles: true,
+        cancelable: true
+      });
+      shell.dispatchEvent(paneNumber);
+
+      await waitFor(() => expect(screen.getByText('Alpha')).toBeVisible());
+      expect(paneNumber.defaultPrevented).toBe(true);
+      expect(bubbled).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(shell, { key: ']', metaKey: true });
+      await waitFor(() => expect(screen.getByText('Beta')).toBeVisible());
+
+      fireEvent.keyDown(shell, { key: 'ArrowLeft', metaKey: true, altKey: true });
+      await waitFor(() => expect(screen.getByText('Alpha')).toBeVisible());
+
+      fireEvent.keyDown(shell, { key: '9', metaKey: true });
+      expect(screen.getByText('Alpha')).toBeVisible();
+    } finally {
+      document.removeEventListener('keydown', bubbled);
+    }
+  });
+
+  it('does not handle shortcut-like keys from editable or composing targets', async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha'), terminal('term-beta', 'Beta')]);
+    vi.mocked(api.getTerminalLayout).mockResolvedValue(serverLayout(splitLayout(), 4));
+    const bubbled = vi.fn();
+    document.addEventListener('keydown', bubbled);
+
+    try {
+      render(<TerminalWorkspace api={api} />);
+
+      const shell = await screen.findByRole('main');
+      expect(screen.getByText('Beta')).toBeVisible();
+
+      const editable = document.createElement('div');
+      editable.setAttribute('contenteditable', 'plaintext-only');
+      shell.append(editable);
+
+      const editableEvent = new KeyboardEvent('keydown', {
+        key: '1',
+        metaKey: true,
+        bubbles: true,
+        cancelable: true
+      });
+      editable.dispatchEvent(editableEvent);
+
+      expect(editableEvent.defaultPrevented).toBe(false);
+      expect(bubbled).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Beta')).toBeVisible();
+
+      const processEvent = new KeyboardEvent('keydown', {
+        key: 'Process',
+        metaKey: true,
+        bubbles: true,
+        cancelable: true
+      });
+      shell.dispatchEvent(processEvent);
+
+      expect(processEvent.defaultPrevented).toBe(false);
+      expect(bubbled).toHaveBeenCalledTimes(2);
+      expect(screen.getByText('Beta')).toBeVisible();
+
+      const composingEvent = new KeyboardEvent('keydown', {
+        key: '1',
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+        isComposing: true
+      });
+      shell.dispatchEvent(composingEvent);
+
+      expect(composingEvent.defaultPrevented).toBe(false);
+      expect(bubbled).toHaveBeenCalledTimes(3);
+      expect(screen.getByText('Beta')).toBeVisible();
+    } finally {
+      document.removeEventListener('keydown', bubbled);
+    }
+  });
+
+  it('selects workspaces from ctrl number shortcuts', async () => {
+    const api = createApi();
+
+    render(<TerminalWorkspace api={api} />);
+
+    const shell = await screen.findByRole('main');
+    const workspaces = screen.getByRole('navigation', { name: 'Workspaces' });
+    const tabs = screen.getByRole('navigation', { name: 'Terminal tabs' });
+
+    fireEvent.click(within(workspaces).getByRole('button', { name: 'New workspace' }));
+    fireEvent.click(within(workspaces).getByRole('button', { name: /^Workspace 2/ }));
+    expect(screen.getByText('No terminal is open.')).toBeVisible();
+
+    fireEvent.keyDown(shell, { key: '1', ctrlKey: true });
+
+    await waitFor(() => expect(within(tabs).getByText('Alpha')).toBeVisible());
+    expect(within(workspaces).getByRole('button', { name: /^Leominal/ })).toHaveAttribute('aria-current', 'page');
+
+    fireEvent.keyDown(shell, { key: '9', ctrlKey: true });
+    expect(within(workspaces).getByRole('button', { name: /^Leominal/ })).toHaveAttribute('aria-current', 'page');
+  });
+
   it('migrates a saved local workspace layout when the server has no layout yet', async () => {
     const api = createApi([terminal('term-alpha', 'Alpha'), terminal('term-beta', 'Beta')]);
     vi.mocked(api.getTerminalLayout).mockResolvedValue(serverLayout(null, 0));
