@@ -1,4 +1,8 @@
 export const leominalViewportHeightProperty = '--leominal-viewport-height';
+export const leominalKeyboardInsetBottomProperty = '--leominal-keyboard-inset-bottom';
+export const leominalKeyboardVisibleAttribute = 'data-leominal-keyboard-visible';
+
+const keyboardVisibleThresholdPx = 120;
 
 export function installViewportHeightSync(win: Window = window): () => void {
   const root = win.document.documentElement;
@@ -9,6 +13,8 @@ export function installViewportHeightSync(win: Window = window): () => void {
     if (height !== null) {
       root.style.setProperty(leominalViewportHeightProperty, `${height}px`);
     }
+    root.style.setProperty(leominalKeyboardInsetBottomProperty, `${readKeyboardInsetBottom(win)}px`);
+    root.setAttribute(leominalKeyboardVisibleAttribute, String(isKeyboardVisible(win)));
   }
 
   syncHeight();
@@ -27,6 +33,8 @@ export function installViewportHeightSync(win: Window = window): () => void {
     win.removeEventListener('pageshow', syncHeight);
     win.document.removeEventListener('visibilitychange', syncHeight);
     root.style.removeProperty(leominalViewportHeightProperty);
+    root.style.removeProperty(leominalKeyboardInsetBottomProperty);
+    root.removeAttribute(leominalKeyboardVisibleAttribute);
   };
 }
 
@@ -43,4 +51,17 @@ function readVisibleViewportHeight(win: Window): number | null {
 
 function isUsableHeight(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function isKeyboardVisible(win: Window): boolean {
+  return readKeyboardInsetBottom(win) > keyboardVisibleThresholdPx;
+}
+
+function readKeyboardInsetBottom(win: Window): number {
+  const visualViewportHeight = win.visualViewport?.height;
+  if (!isUsableHeight(visualViewportHeight) || !isUsableHeight(win.innerHeight)) {
+    return 0;
+  }
+  const offsetTop = typeof win.visualViewport?.offsetTop === 'number' ? win.visualViewport.offsetTop : 0;
+  return Math.max(0, Math.round(win.innerHeight - visualViewportHeight - offsetTop));
 }

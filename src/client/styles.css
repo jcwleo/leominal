@@ -4,7 +4,10 @@
   font-family: var(--leo-font-ui);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
   --leominal-viewport-height: 100vh;
+  --leominal-keyboard-inset-bottom: 0px;
   --leominal-safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --leo-bg: #0a0d10;
   --leo-bg-2: #0d1216;
@@ -45,6 +48,7 @@ body,
 body {
   overflow: hidden;
   background: var(--leo-bg);
+  touch-action: manipulation;
 }
 
 button,
@@ -805,6 +809,32 @@ input {
   height: 100%;
 }
 
+.mobile-terminal-key-bar {
+  display: none;
+}
+
+.mobile-terminal-key {
+  display: grid;
+  min-width: 34px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--leo-line-2);
+  border-radius: 5px;
+  padding: 0 8px;
+  color: var(--leo-fg-2);
+  background: rgba(13, 18, 22, 0.94);
+  font-family: var(--leo-font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.mobile-terminal-key:hover:not(:disabled),
+.mobile-terminal-key[data-active="true"] {
+  border-color: rgba(94, 234, 212, 0.55);
+  color: var(--leo-fg);
+  background: var(--leo-accent-soft);
+}
+
 .terminal-status-bar {
   display: flex;
   align-items: center;
@@ -1169,6 +1199,16 @@ h1 {
 }
 
 @media (max-width: 760px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+
+  .xterm .xterm-helper-textarea {
+    font-size: 16px;
+  }
+
   .terminal-shell,
   .terminal-shell[data-collapsed="true"] {
     display: block;
@@ -1285,6 +1325,43 @@ h1 {
     width: 26px;
     height: 26px;
     opacity: 1;
+  }
+
+  .terminal-pane[data-active="true"] .xterm-container {
+    padding-bottom: calc(46px + var(--leominal-safe-area-bottom));
+  }
+
+  .mobile-terminal-key-bar {
+    position: absolute;
+    right: 8px;
+    bottom: max(8px, var(--leominal-safe-area-bottom));
+    left: 8px;
+    z-index: 10;
+    display: flex;
+    max-width: calc(100% - 16px);
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    overflow-x: auto;
+    border: 1px solid rgba(42, 51, 64, 0.85);
+    border-radius: 8px;
+    padding: 4px;
+    background: rgba(8, 9, 11, 0.86);
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+    scrollbar-width: none;
+  }
+
+  .mobile-terminal-key-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  :root[data-leominal-keyboard-visible="true"] .terminal-pane[data-active="true"] .xterm-container {
+    padding-bottom: 3px;
+  }
+
+  :root[data-leominal-keyboard-visible="true"] .mobile-terminal-key-bar {
+    position: fixed;
+    bottom: calc(var(--leominal-keyboard-inset-bottom) + 4px);
   }
 
   .terminal-status-bar {

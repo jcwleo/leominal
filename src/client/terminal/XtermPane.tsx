@@ -6,6 +6,8 @@ import type { TerminalSummary } from '../../shared/types.js';
 import { createTerminalWebSocketUrl } from '../api/client.js';
 import { terminalFontFamily, terminalFontSize, waitForTerminalFonts } from './fontStack.js';
 import { HangulInputComposer } from './hangulInput.js';
+import { MobileTerminalKeyBar } from './MobileTerminalKeyBar.js';
+import { ctrlModifiedData, terminalKeySequence, type MobileTerminalStandaloneKey } from './mobileTerminalKeys.js';
 
 const terminalFitSettleDelaysMs = [0, 50, 150, 350] as const;
 
@@ -28,7 +30,9 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
   const reconnectEnabledRef = useRef(terminal.status === 'running');
   const lastReportedSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const pendingFitTimersRef = useRef<Map<number, number>>(new Map());
+  const ctrlModifierArmedRef = useRef(false);
   const [, setConnectionStatus] = useState<'connecting' | 'connected' | 'reconnecting' | 'closed'>('connecting');
+  const [ctrlModifierArmed, setCtrlModifierArmed] = useState(false);
 
   useEffect(() => {
     callbacksRef.current = { onExit, onSnapshot };
@@ -88,6 +92,14 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
 
       const inputComposer = new HangulInputComposer();
       dataDisposable = xterm.onData((data) => {
+        if (ctrlModifierArmedRef.current) {
+          setCtrlModifier(false);
+          const modifiedData = ctrlModifiedData(data);
+          if (modifiedData) {
+            sendSocketMessage({ type: 'input', terminalId: terminal.id, data: modifiedData });
+            return;
+          }
+        }
         const composedData = inputComposer.accept(data);
         if (composedData) {
           sendSocketMessage({ type: 'input', terminalId: terminal.id, data: composedData });
@@ -307,6 +319,25 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
     return false;
   }
 
+  function focusTerminal() {
+    xtermRef.current?.focus();
+  }
+
+  function armCtrlModifier() {
+    setCtrlModifier(true);
+    focusTerminal();
+  }
+
+  function setCtrlModifier(armed: boolean) {
+    ctrlModifierArmedRef.current = armed;
+    setCtrlModifierArmed(armed);
+  }
+
+  function sendStandaloneKey(key: MobileTerminalStandaloneKey) {
+    sendSocketMessage({ type: 'input', terminalId: terminal.id, data: terminalKeySequence(key) });
+    focusTerminal();
+  }
+
   return (
     <section className="terminal-pane" data-active={active} onMouseDown={onSelect}>
       <header className="terminal-pane-header">
@@ -335,6 +366,14 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
         ) : null}
       </header>
       <div className="xterm-container" ref={containerRef} />
+      {active && terminal.status === 'running' ? (
+        <MobileTerminalKeyBar
+          ctrlActive={ctrlModifierArmed}
+          onCtrl={armCtrlModifier}
+          onStandaloneKey={sendStandaloneKey}
+          onPreserveFocus={focusTerminal}
+        />
+      ) : null}
     </section>
   );
 }

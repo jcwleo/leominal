@@ -25,6 +25,25 @@ test('browser UI sets the initial password, creates split panes, refreshes, and 
   await page.getByRole('button', { name: 'New tab' }).waitFor();
   await expect(page.locator('.xterm-container').first()).toBeVisible();
   await expectTerminalToFillWorkspace(page);
+
+  const mobileKeyBar = page.locator('.mobile-terminal-key-bar').first();
+  await expect(mobileKeyBar).toHaveCSS('display', 'none');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(mobileKeyBar).toBeVisible();
+  await expect(mobileKeyBar.getByRole('button', { name: 'Arm Control modifier' })).toBeVisible();
+  await expect(mobileKeyBar.getByRole('button', { name: /command/i })).toHaveCount(0);
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty('--leominal-keyboard-inset-bottom', '320px');
+    document.documentElement.setAttribute('data-leominal-keyboard-visible', 'true');
+  });
+  await expect(mobileKeyBar).toHaveCSS('position', 'fixed');
+  await expect(mobileKeyBar).toHaveCSS('bottom', '324px');
+  await page.evaluate(() => {
+    document.documentElement.style.removeProperty('--leominal-keyboard-inset-bottom');
+    document.documentElement.removeAttribute('data-leominal-keyboard-visible');
+  });
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   await page.getByRole('button', { name: 'Split right' }).click();
   await expect(page.getByRole('navigation', { name: 'Terminal tabs' }).getByText('2 panes')).toBeVisible();
 

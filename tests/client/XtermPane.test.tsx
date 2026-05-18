@@ -14,7 +14,9 @@ const xtermMocks = vi.hoisted(() => ({
     write: ReturnType<typeof vi.fn>;
     writeln: ReturnType<typeof vi.fn>;
     refresh: ReturnType<typeof vi.fn>;
+    focus: ReturnType<typeof vi.fn>;
     dispose: ReturnType<typeof vi.fn>;
+    dataHandler: ((data: string) => void) | null;
   }>,
   nextSize: { cols: 120, rows: 34 }
 }));
@@ -29,7 +31,9 @@ vi.mock('@xterm/xterm', () => ({
     write = vi.fn();
     writeln = vi.fn();
     refresh = vi.fn();
+    focus = vi.fn();
     dispose = vi.fn();
+    dataHandler: ((data: string) => void) | null = null;
 
     constructor(options: Record<string, unknown>) {
       this.options = options;
@@ -40,8 +44,9 @@ vi.mock('@xterm/xterm', () => ({
       addon.activate?.(this);
     }
 
-    onData() {
-      return { dispose: vi.fn() };
+    onData(handler: (data: string) => void) {
+      this.dataHandler = handler;
+      return { dispose: vi.fn(() => (this.dataHandler = null)) };
     }
   }
 }));
@@ -159,6 +164,14 @@ function resizeMessages(socket: MockWebSocket[]) {
   );
 }
 
+function inputMessages(socket: MockWebSocket[]) {
+  return socket.flatMap((candidate) =>
+    candidate.sent
+      .map((message) => JSON.parse(message) as { type?: string; terminalId?: string; data?: string })
+      .filter((message) => message.type === 'input')
+  );
+}
+
 async function openSocketAfterXtermReady(): Promise<MockWebSocket> {
   await waitFor(() => expect(xtermMocks.terminals[0]?.open).toHaveBeenCalled());
   const socket = sockets[0];
@@ -270,5 +283,108 @@ describe('XtermPane', () => {
 
     expect(onClose).toHaveBeenCalledOnce();
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('renders a mobile terminal key bar for the active running pane', async () => {
+    renderPane();
+    await waitFor(() => expect(xtermMocks.terminals[0]?.open).toHaveBeenCalled());
+
+    const toolbar = screen.getByRole('toolbar', { name: 'Mobile terminal keys' });
+    expect(toolbar).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Arm Control modifier' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Send Escape' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Send Tab' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Send Arrow Left' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Send Arrow Right' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Send Arrow Up' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Send Arrow Down' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /command/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /ctrl\+c/i })).toBeNull();
+  });
+
+  it('sends standalone mobile key bar inputs to the active terminal socket', async () => {
+    renderPane();
+    const socket = await openSocketAfterXtermReady();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send Escape' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send Tab' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send Arrow Up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send Arrow Down' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send Arrow Right' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send Arrow Left' }));
+
+    expect(inputMessages([socket])).toEqual([
+      { type: 'input', terminalId: 'term-alpha', data: '\x1b' },
+      { type: 'input', terminalId: 'term-alpha', data: '\t' },
+      { type: 'input', terminalId: 'term-alpha', data: '\x1b[A' },
+      { type: 'input', terminalId: 'term-alpha', data: '\x1b[B' },
+      { type: 'input', terminalId: 'term-alpha', data: '\x1b[C' },
+      { type: 'input', terminalId: 'term-alpha', data: '\x1b[D' }
+    ]);
+    expect(xtermMocks.terminals[0]?.focus).toHaveBeenCalled();
+  });
+
+  it('applies Ctrl to one xterm input event and then resets', async () => {
+    renderPane();
+    const socket = await openSocketAfterXtermReady();
+    const ctrlButton = screen.getByRole('button', { name: 'Arm Control modifier' });
+
+    fireEvent.click(ctrlButton);
+    expect(ctrlButton).toHaveAttribute('aria-pressed', 'true');
+    xtermMocks.terminals[0]?.dataHandler?.('c');
+    xtermMocks.terminals[0]?.dataHandler?.('c');
+
+    expect(inputMessages([socket])).toEqual([
+      { type: 'input', terminalId: 'term-alpha', data: '\x03' },
+      { type: 'input', terminalId: 'term-alpha', data: 'c' }
+    ]);
+    await waitFor(() => expect(ctrlButton).toHaveAttribute('aria-pressed', 'false'));
+  });
+
+  it('passes through unhandled Ctrl-armed input and resets the modifier', async () => {
+    renderPane();
+    const socket = await openSocketAfterXtermReady();
+    const ctrlButton = screen.getByRole('button', { name: 'Arm Control modifier' });
+
+    fireEvent.click(ctrlButton);
+    xtermMocks.terminals[0]?.dataHandler?.('\r');
+    xtermMocks.terminals[0]?.dataHandler?.('c');
+
+    expect(inputMessages([socket])).toEqual([
+      { type: 'input', terminalId: 'term-alpha', data: '\r' },
+      { type: 'input', terminalId: 'term-alpha', data: 'c' }
+    ]);
+    await waitFor(() => expect(ctrlButton).toHaveAttribute('aria-pressed', 'false'));
+  });
+
+  it('does not render the mobile key bar for inactive or exited panes', async () => {
+    const exited = { ...terminal(), status: 'exited' as const, exitCode: 0 };
+
+    const { rerender } = render(
+      <XtermPane
+        terminal={terminal()}
+        active={false}
+        onSelect={() => undefined}
+        onExit={() => undefined}
+        onSnapshot={() => undefined}
+        canClose={false}
+        onClose={() => undefined}
+      />
+    );
+    await waitFor(() => expect(xtermMocks.terminals[0]?.open).toHaveBeenCalled());
+    expect(screen.queryByRole('toolbar', { name: 'Mobile terminal keys' })).toBeNull();
+
+    rerender(
+      <XtermPane
+        terminal={exited}
+        active
+        onSelect={() => undefined}
+        onExit={() => undefined}
+        onSnapshot={() => undefined}
+        canClose={false}
+        onClose={() => undefined}
+      />
+    );
+    expect(screen.queryByRole('toolbar', { name: 'Mobile terminal keys' })).toBeNull();
   });
 });
