@@ -202,6 +202,7 @@ function terminalLayout(tabTitle = 'Shell'): TerminalLayoutState {
             root: {
               type: 'split',
               direction: 'vertical',
+              ratio: 0.5,
               first: { type: 'pane', terminalId: 'terminal-1' },
               second: { type: 'pane', terminalId: 'terminal-2' }
             }

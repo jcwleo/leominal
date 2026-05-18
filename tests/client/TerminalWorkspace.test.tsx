@@ -16,7 +16,17 @@ import { ApiError } from '../../src/client/api/client.js';
 import type { ApiClient } from '../../src/client/api/client.js';
 
 vi.mock('../../src/client/terminal/SplitPane.js', () => ({
-  SplitPane: () => <div data-testid="split-pane">terminal canvas</div>
+  SplitPane: ({ onClose, onResize }: { onClose?: (terminalId: string) => void; onResize?: (path: number[], ratio: number) => void }) => (
+    <div data-testid="split-pane">
+      terminal canvas
+      <button type="button" onClick={() => onClose?.('term-alpha')}>
+        Close pane term-alpha
+      </button>
+      <button type="button" onClick={() => onResize?.([], 0.7)}>
+        Resize panes
+      </button>
+    </div>
+  )
 }));
 
 import { TerminalWorkspace } from '../../src/client/terminal/TerminalWorkspace.js';
@@ -98,6 +108,7 @@ function splitLayout(): TerminalLayoutState {
             root: {
               type: 'split',
               direction: 'vertical',
+              ratio: 0.5,
               first: { type: 'pane', terminalId: 'term-alpha' },
               second: { type: 'pane', terminalId: 'term-beta' }
             }
@@ -122,17 +133,49 @@ describe('TerminalWorkspace', () => {
 
     const workspaces = await screen.findByRole('navigation', { name: 'Workspaces' });
     expect(workspaces).toBeVisible();
-    expect(screen.getByText('WORKSPACES')).toBeVisible();
+    expect(screen.getByText('workspaces')).toBeVisible();
     expect(within(workspaces).getByText('Leominal')).toBeVisible();
     const tabs = screen.getByRole('navigation', { name: 'Terminal tabs' });
     expect(tabs).toBeVisible();
     expect(screen.getByRole('button', { name: 'New tab' })).toBeVisible();
     expect(within(tabs).getByRole('button', { name: 'Split right' })).toBeVisible();
     expect(within(tabs).getByRole('button', { name: 'Split down' })).toBeVisible();
-    expect(within(tabs).getByRole('button', { name: 'Close pane' })).toBeVisible();
+    expect(within(tabs).queryByRole('button', { name: 'Close pane' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Close pane term-alpha' })).toBeVisible();
     expect(screen.queryByRole('toolbar', { name: 'Workspace actions' })).toBeNull();
     expect(screen.queryByText('1 pane(s)')).toBeNull();
     expect(screen.getByTestId('split-pane')).toBeVisible();
+  });
+
+  it('collapses the workspace sidebar and disables rename while collapsed', async () => {
+    const api = createApi();
+
+    render(<TerminalWorkspace api={api} />);
+
+    const shell = await screen.findByRole('main');
+    const workspaces = screen.getByRole('navigation', { name: 'Workspaces' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+
+    expect(shell).toHaveAttribute('data-collapsed', 'true');
+    fireEvent.doubleClick(within(workspaces).getByRole('button', { name: 'Select workspace Leominal' }));
+    expect(within(workspaces).queryByLabelText('Rename workspace Leominal')).toBeNull();
+  });
+
+  it('renders session expiry next to logout in the sidebar footer', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-05-17T00:00:00.000Z').getTime());
+    const api = createApi();
+
+    try {
+      render(<TerminalWorkspace api={api} sessionExpiresAt="2026-05-17T11:10:00.000Z" />);
+
+      await screen.findByRole('navigation', { name: 'Workspaces' });
+
+      expect(screen.getByText('session · 11h left')).toBeVisible();
+      expect(screen.getByRole('button', { name: 'logout' })).toBeVisible();
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('creates a terminal from the top tab bar add button', async () => {

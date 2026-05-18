@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { isTerminalTabLayout, normalizeTerminalLayoutState } from '../../shared/layoutState.js';
-import type { TerminalId, TerminalLayoutState, TerminalTabLayout, TerminalWorkspaceLayout } from '../../shared/types.js';
+import type { TerminalId, TerminalLayoutState, TerminalSummary, TerminalTabLayout, TerminalWorkspaceLayout } from '../../shared/types.js';
 import { ApiError, type ApiClient, createApiClient } from '../api/client.js';
+import { LeominalMark } from './LeominalMark.js';
 import { SplitPane } from './SplitPane.js';
 import { TerminalTabs } from './TerminalTabs.js';
 import {
   createEmptyTerminalState,
+  listTabTerminalIds,
   listWorkspaceTerminalIds,
   reconstructTerminalState,
   serializeWorkspaceState,
@@ -15,6 +17,7 @@ import {
 
 const layoutStorageKey = 'leominal.terminalLayout.v1';
 const workspaceStorageKey = 'leominal.terminalWorkspaces.v2';
+const sidebarCollapsedStorageKey = 'leominal.sidebarCollapsed.v1';
 const layoutSaveDebounceMs = 75;
 
 interface TerminalWorkspaceProps {
@@ -25,6 +28,7 @@ interface TerminalWorkspaceProps {
 
 export function TerminalWorkspace({
   api: providedApi,
+  sessionExpiresAt = null,
   onLogout = async () => undefined
 }: TerminalWorkspaceProps) {
   const api = useMemo(() => providedApi ?? createApiClient(), [providedApi]);
@@ -32,6 +36,7 @@ export function TerminalWorkspace({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [editingWorkspace, setEditingWorkspace] = useState<{ workspaceId: string; title: string } | null>(null);
   const workspaceEditInputRef = useRef<HTMLInputElement | null>(null);
   const workspaceRenameCancelledRef = useRef(false);
@@ -58,6 +63,13 @@ export function TerminalWorkspace({
     workspaceEditInputRef.current?.focus();
     workspaceEditInputRef.current?.select();
   }, [editingWorkspace?.workspaceId]);
+
+  useEffect(() => {
+    writeSidebarCollapsed(sidebarCollapsed);
+    if (sidebarCollapsed) {
+      setEditingWorkspace(null);
+    }
+  }, [sidebarCollapsed]);
 
   useEffect(() => {
     stateRef.current = state;
@@ -128,6 +140,9 @@ export function TerminalWorkspace({
   }
 
   function beginRenameWorkspace(workspaceId: string, title: string) {
+    if (sidebarCollapsed && !sidebarOpen) {
+      return;
+    }
     workspaceRenameCancelledRef.current = false;
     setEditingWorkspace({ workspaceId, title });
   }
@@ -161,13 +176,6 @@ export function TerminalWorkspace({
       const response = await api.createTerminal(request);
       dispatchLayoutChange({ type: 'terminal.split', terminal: response.terminal, direction });
     });
-  }
-
-  async function closeActivePane() {
-    if (!activeTerminalId) {
-      return;
-    }
-    await closeTerminal(activeTerminalId);
   }
 
   async function closeTerminal(terminalId: TerminalId) {
@@ -316,26 +324,52 @@ export function TerminalWorkspace({
     }
   }
 
+  const sessionLabel = formatSessionExpiry(sessionExpiresAt);
+  const showSidebarDetails = !sidebarCollapsed || sidebarOpen;
+
   return (
-    <main className="terminal-shell" data-sidebar-open={sidebarOpen}>
+    <main className="terminal-shell" data-collapsed={sidebarCollapsed} data-sidebar-open={sidebarOpen}>
       <button type="button" className="workspace-backdrop" aria-label="Close workspaces" onClick={() => setSidebarOpen(false)} />
       <aside className="workspace-sidebar">
+        <header className="workspace-brand">
+          <LeominalMark size={18} />
+          {showSidebarDetails ? <span className="workspace-brand-name">leominal</span> : null}
+          <button
+            type="button"
+            className="sidebar-collapse-button"
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+          >
+            {sidebarCollapsed ? '>' : '<'}
+          </button>
+          <button
+            type="button"
+            className="sidebar-drawer-close-button"
+            aria-label="Close workspaces"
+            title="Close workspaces"
+            onClick={() => setSidebarOpen(false)}
+          >
+            x
+          </button>
+        </header>
         <nav className="workspace-nav" aria-label="Workspaces">
-          <div className="workspace-sidebar-header">
-            <span>WORKSPACES</span>
-            <button type="button" aria-label="New workspace" title="New workspace" onClick={createNewWorkspace}>
-              +
-            </button>
-          </div>
+          {showSidebarDetails ? (
+            <div className="workspace-sidebar-header">
+              <span>workspaces</span>
+              <button type="button" aria-label="New workspace" title="New workspace" onClick={createNewWorkspace}>
+                +
+              </button>
+            </div>
+          ) : null}
           <div className="workspace-list">
             {state.workspaces.map((workspace) => {
-              const workspaceTerminalIds = listWorkspaceTerminalIds(workspace);
               const workspaceActiveTab = workspace.tabs.find((tab) => tab.id === workspace.activeTabId) ?? workspace.tabs[0];
               const workspaceActiveTerminal = workspaceActiveTab ? state.terminals[workspaceActiveTab.activeTerminalId] : undefined;
               const workspaceSummary = workspaceActiveTerminal?.cwd ?? `${workspace.tabs.length} tab${workspace.tabs.length === 1 ? '' : 's'}`;
-              const summaryText = `${workspaceSummary}${workspaceTerminalIds.length > 0 ? ` | ${workspaceTerminalIds.length} pane${workspaceTerminalIds.length === 1 ? '' : 's'}` : ''}`;
               const active = workspace.id === state.activeWorkspaceId;
-              const editing = editingWorkspace?.workspaceId === workspace.id;
+              const editing = editingWorkspace?.workspaceId === workspace.id && showSidebarDetails;
+              const workspaceInitial = (workspace.title.trim()[0] ?? '?').toUpperCase();
               return (
                 <div
                   className="workspace-entry"
@@ -369,27 +403,43 @@ export function TerminalWorkspace({
                           }
                         }}
                       />
-                      <span>{summaryText}</span>
+                      <span className="workspace-entry-meta">
+                        <span className="workspace-entry-cwd">{workspaceSummary}</span>
+                        <span>{workspace.tabs.length}</span>
+                      </span>
                     </form>
                   ) : (
                     <button
                       type="button"
                       className="workspace-select-button"
                       aria-current={active ? 'page' : undefined}
+                      aria-label={!showSidebarDetails ? `Select workspace ${workspace.title}` : undefined}
+                      title={sidebarCollapsed ? workspace.title : `${workspace.title} - double-click to rename`}
                       onClick={() => {
                         dispatchLayoutChange({ type: 'workspace.selected', workspaceId: workspace.id });
                         setSidebarOpen(false);
                       }}
                       onDoubleClick={(event) => {
                         event.preventDefault();
-                        beginRenameWorkspace(workspace.id, workspace.title);
+                        if (showSidebarDetails) {
+                          beginRenameWorkspace(workspace.id, workspace.title);
+                        }
                       }}
                     >
-                      <strong>{workspace.title}</strong>
-                      <span>{summaryText}</span>
+                      {!showSidebarDetails ? (
+                        <span className="workspace-initial">{workspaceInitial}</span>
+                      ) : (
+                        <>
+                          <strong>{workspace.title}</strong>
+                          <span className="workspace-entry-meta">
+                            <span className="workspace-entry-cwd">{workspaceSummary}</span>
+                            <span>{workspace.tabs.length}</span>
+                          </span>
+                        </>
+                      )}
                     </button>
                   )}
-                  {state.workspaces.length > 1 ? (
+                  {state.workspaces.length > 1 && showSidebarDetails ? (
                     <button
                       type="button"
                       className="workspace-close-button"
@@ -405,12 +455,14 @@ export function TerminalWorkspace({
             })}
           </div>
         </nav>
-        <div className="workspace-sidebar-footer">
-          <span>Leominal</span>
-          <button type="button" className="secondary-button" onClick={() => void logout()}>
-            Logout
-          </button>
-        </div>
+        {showSidebarDetails ? (
+          <div className="workspace-sidebar-footer">
+            <span>{sessionLabel}</span>
+            <button type="button" className="secondary-button" onClick={() => void logout()}>
+              logout
+            </button>
+          </div>
+        ) : null}
       </aside>
 
       <section className="terminal-main" aria-label="Terminal workspace">
@@ -424,7 +476,6 @@ export function TerminalWorkspace({
           onCloseTerminals={(terminalIds) => void closeTerminals(terminalIds)}
           onSplitVertical={() => void split('vertical')}
           onSplitHorizontal={() => void split('horizontal')}
-          onCloseActivePane={() => void closeActivePane()}
           onRenameTab={(tabId, title) => dispatchLayoutChange({ type: 'tab.renamed', tabId, title })}
           activePaneAvailable={Boolean(activeTerminalId)}
         />
@@ -440,11 +491,16 @@ export function TerminalWorkspace({
               terminals={state.terminals}
               activeTerminalId={activeTab.activeTerminalId}
               onSelect={(terminalId) => dispatchLayoutChange({ type: 'pane.selected', terminalId })}
+              onClose={(terminalId) => void closeTerminal(terminalId)}
+              onResize={(path, ratio) => dispatchLayoutChange({ type: 'pane.resized', path, ratio })}
               onExit={(terminalId, exitCode) => dispatchTerminalState({ type: 'terminal.exited', terminalId, exitCode })}
               onSnapshot={(terminal) => dispatchTerminalState({ type: 'terminal.updated', terminal })}
             />
           ) : null}
         </section>
+        {activeWorkspace && activeTab ? (
+          <StatusBar activeTerminal={activeTerminalId ? state.terminals[activeTerminalId] : undefined} tab={activeTab} tabCount={activeWorkspace.tabs.length} />
+        ) : null}
       </section>
     </main>
   );
@@ -458,6 +514,33 @@ function EmptyWorkspace({ onCreate }: { onCreate: () => void }) {
         New tab
       </button>
     </div>
+  );
+}
+
+function StatusBar({
+  activeTerminal,
+  tab,
+  tabCount
+}: {
+  activeTerminal: TerminalSummary | undefined;
+  tab: TerminalTabLayout;
+  tabCount: number;
+}) {
+  const paneCount = listTabTerminalIds(tab).length;
+  return (
+    <footer className="terminal-status-bar">
+      <span className="terminal-status-cwd">{activeTerminal?.cwd ?? '~'}</span>
+      <span className="terminal-status-separator">·</span>
+      <span>{activeTerminal?.title ?? 'shell'}</span>
+      <span className="terminal-status-separator">·</span>
+      <span>zsh</span>
+      <span className="terminal-status-spacer" />
+      <span>
+        {tabCount} tab · {paneCount} pane
+      </span>
+      <span className="terminal-status-separator">·</span>
+      <span className="terminal-status-connected">● connected</span>
+    </footer>
   );
 }
 
@@ -514,6 +597,42 @@ function writeSavedLayout(layout: TerminalLayoutState) {
     return;
   }
   localStorage.removeItem(workspaceStorageKey);
+}
+
+function readSidebarCollapsed(): boolean {
+  try {
+    return localStorage.getItem(sidebarCollapsedStorageKey) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function writeSidebarCollapsed(collapsed: boolean) {
+  try {
+    localStorage.setItem(sidebarCollapsedStorageKey, collapsed ? 'true' : 'false');
+  } catch {
+    // Ignore unavailable storage; the collapse control still works for the session.
+  }
+}
+
+function formatSessionExpiry(expiresAt: string | null): string {
+  if (!expiresAt) {
+    return 'session · local';
+  }
+  const expiryMs = Date.parse(expiresAt);
+  if (!Number.isFinite(expiryMs)) {
+    return 'session · local';
+  }
+  const remainingMs = expiryMs - Date.now();
+  if (remainingMs <= 0) {
+    return 'session · expired';
+  }
+  const minutes = Math.max(1, Math.floor(remainingMs / 60_000));
+  if (minutes < 60) {
+    return `session · ${minutes}m left`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `session · ${hours}h left`;
 }
 
 function errorMessage(error: unknown): string {

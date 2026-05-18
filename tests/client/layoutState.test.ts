@@ -18,6 +18,7 @@ describe('terminal layout state contract', () => {
               root: {
                 type: 'split',
                 direction: 'vertical',
+                ratio: 0.58,
                 first: { type: 'pane', terminalId: 'term-alpha' },
                 second: { type: 'pane', terminalId: 'term-beta' }
               }
@@ -29,6 +30,40 @@ describe('terminal layout state contract', () => {
 
     expect(isTerminalLayoutState(layout)).toBe(true);
     expect(normalizeTerminalLayoutState(layout)).toEqual(layout);
+  });
+
+  it('normalizes legacy split nodes with a default ratio', () => {
+    const legacyLayout = {
+      activeWorkspaceId: 'workspace-default',
+      workspaces: [
+        {
+          id: 'workspace-default',
+          title: 'Leominal',
+          activeTabId: 'tab-alpha',
+          tabs: [
+            {
+              id: 'tab-alpha',
+              title: 'Ops',
+              activeTerminalId: 'term-beta',
+              root: {
+                type: 'split',
+                direction: 'vertical',
+                first: { type: 'pane', terminalId: 'term-alpha' },
+                second: { type: 'pane', terminalId: 'term-beta' }
+              }
+            }
+          ]
+        }
+      ]
+    };
+
+    expect(normalizeTerminalLayoutState(legacyLayout)?.workspaces[0]?.tabs[0]?.root).toEqual({
+      type: 'split',
+      direction: 'vertical',
+      ratio: 0.5,
+      first: { type: 'pane', terminalId: 'term-alpha' },
+      second: { type: 'pane', terminalId: 'term-beta' }
+    });
   });
 
   it('rejects malformed layout nodes', () => {

@@ -22,6 +22,7 @@ export interface AuthSessionStatus {
 export interface SplitNode {
   type: 'split';
   direction: 'horizontal' | 'vertical';
+  ratio: number;
   first: LayoutNode;
   second: LayoutNode;
 }

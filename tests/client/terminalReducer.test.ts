@@ -61,8 +61,33 @@ describe('terminal layout reducer', () => {
     expect(activeWorkspace?.tabs[0]?.root).toEqual({
       type: 'split',
       direction: 'vertical',
+      ratio: 0.5,
       first: { type: 'pane', terminalId: 'term-alpha' },
       second: { type: 'pane', terminalId: 'term-beta' }
+    });
+  });
+
+  it('updates a split ratio at the requested tree path', () => {
+    const alpha = terminal('term-alpha', 'Alpha');
+    const beta = terminal('term-beta', 'Beta');
+    const gamma = terminal('term-gamma', 'Gamma');
+    const firstSplit = splitActivePane(createTabForTerminal(createEmptyTerminalState(), alpha), beta, 'vertical');
+    const nestedSplit = splitActivePane(firstSplit, gamma, 'horizontal');
+
+    const state = terminalReducer(nestedSplit, {
+      type: 'pane.resized',
+      path: [1],
+      ratio: 0.72
+    });
+
+    const root = state.workspaces[0]?.tabs[0]?.root;
+    expect(root).toMatchObject({
+      type: 'split',
+      ratio: 0.5,
+      second: {
+        type: 'split',
+        ratio: 0.72
+      }
     });
   });
 
@@ -160,12 +185,13 @@ describe('terminal layout reducer', () => {
         id: 'tab-saved',
         title: 'Saved',
         activeTerminalId: 'term-missing',
-        root: {
-          type: 'split',
-          direction: 'horizontal',
-          first: { type: 'pane', terminalId: 'term-alpha' },
-          second: { type: 'pane', terminalId: 'term-missing' }
-        }
+          root: {
+            type: 'split',
+            direction: 'horizontal',
+            ratio: 0.64,
+            first: { type: 'pane', terminalId: 'term-alpha' },
+            second: { type: 'pane', terminalId: 'term-missing' }
+          }
       }
     ];
 

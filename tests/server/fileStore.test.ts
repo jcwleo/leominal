@@ -195,6 +195,7 @@ function terminalLayout(): TerminalLayoutState {
             root: {
               type: 'split',
               direction: 'horizontal',
+              ratio: 0.5,
               first: { type: 'pane', terminalId: 'terminal-1' },
               second: { type: 'pane', terminalId: 'terminal-2' }
             }

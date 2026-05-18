@@ -12,7 +12,6 @@ interface TerminalTabsProps {
   onCloseTerminals: (terminalIds: TerminalId[]) => void;
   onSplitVertical: () => void;
   onSplitHorizontal: () => void;
-  onCloseActivePane: () => void;
   onRenameTab: (tabId: string, title: string) => void;
   activePaneAvailable: boolean;
 }
@@ -27,7 +26,6 @@ export function TerminalTabs({
   onCloseTerminals,
   onSplitVertical,
   onSplitHorizontal,
-  onCloseActivePane,
   onRenameTab,
   activePaneAvailable
 }: TerminalTabsProps) {
@@ -77,18 +75,6 @@ export function TerminalTabs({
         >
           <span className="split-icon split-icon-down" aria-hidden="true" />
         </button>
-        <button
-          type="button"
-          className="pane-action-button"
-          aria-label="Close pane"
-          title="Close pane"
-          onClick={onCloseActivePane}
-          disabled={!activePaneAvailable}
-        >
-          <span className="close-pane-icon" aria-hidden="true">
-            x
-          </span>
-        </button>
       </div>
     );
   }
@@ -109,10 +95,9 @@ export function TerminalTabs({
           const title = tab.title || activeTerminal?.title || tab.activeTerminalId;
           const active = tab.id === activeTabId;
           const editing = editingTab?.tabId === tab.id;
-          const showPaneActions = active && activePaneAvailable;
           return (
             <React.Fragment key={tab.id}>
-              <div className="terminal-tab" data-active={active} data-pane-actions={showPaneActions}>
+              <div className="terminal-tab" data-active={active}>
                 {editing ? (
                   <form
                     className="terminal-tab-editor"
@@ -138,7 +123,8 @@ export function TerminalTabs({
                           setEditingTab(null);
                         }
                       }}
-                    />
+                      />
+                    <small>{terminalIds.length}</small>
                   </form>
                 ) : (
                   <button
@@ -156,7 +142,7 @@ export function TerminalTabs({
                     <small>{terminalIds.length} pane{terminalIds.length === 1 ? '' : 's'}</small>
                   </button>
                 )}
-                {!showPaneActions ? (
+                {tabs.length > 1 && !editing ? (
                   <button
                     type="button"
                     className="icon-button"
@@ -167,15 +153,15 @@ export function TerminalTabs({
                     x
                   </button>
                 ) : null}
-                {showPaneActions ? renderPaneActions() : null}
               </div>
             </React.Fragment>
           );
         })}
+        <button type="button" className="tab-add-button" aria-label="New tab" title="New tab" onClick={onCreateTab}>
+          +
+        </button>
       </div>
-      <button type="button" className="tab-add-button" aria-label="New tab" title="New tab" onClick={onCreateTab}>
-        +
-      </button>
+      {activePaneAvailable ? renderPaneActions() : null}
     </nav>
   );
 }

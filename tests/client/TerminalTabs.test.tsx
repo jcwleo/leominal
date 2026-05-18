@@ -33,6 +33,7 @@ describe('TerminalTabs', () => {
       root: {
         type: 'split',
         direction: 'vertical',
+        ratio: 0.5,
         first: { type: 'pane', terminalId: 'term-left' },
         second: { type: 'pane', terminalId: 'term-right' }
       }
@@ -59,7 +60,6 @@ describe('TerminalTabs', () => {
         onCloseTerminals={onCloseTerminals}
         onSplitVertical={() => undefined}
         onSplitHorizontal={() => undefined}
-        onCloseActivePane={() => undefined}
         onRenameTab={() => undefined}
         activePaneAvailable
       />
@@ -70,8 +70,7 @@ describe('TerminalTabs', () => {
     expect(onCloseTerminals).toHaveBeenCalledWith(['term-left', 'term-right']);
   });
 
-  it('uses only the pane close affordance on the active tab', () => {
-    const onCloseActivePane = vi.fn();
+  it('keeps tab close separate from pane actions on the active tab', () => {
     const onCloseTerminals = vi.fn();
     const tab: TerminalTabLayout = {
       id: 'tab-alpha',
@@ -79,29 +78,31 @@ describe('TerminalTabs', () => {
       activeTerminalId: 'term-alpha',
       root: { type: 'pane', terminalId: 'term-alpha' }
     };
+    const secondTab: TerminalTabLayout = {
+      id: 'tab-beta',
+      title: 'Beta',
+      activeTerminalId: 'term-beta',
+      root: { type: 'pane', terminalId: 'term-beta' }
+    };
 
     render(
       <TerminalTabs
-        tabs={[tab]}
+        tabs={[tab, secondTab]}
         activeTabId="tab-alpha"
-        terminals={{ 'term-alpha': terminal('term-alpha', 'Alpha') }}
+        terminals={{ 'term-alpha': terminal('term-alpha', 'Alpha'), 'term-beta': terminal('term-beta', 'Beta') }}
         onSelectTab={() => undefined}
         onCreateTab={() => undefined}
         onToggleWorkspaces={() => undefined}
         onCloseTerminals={onCloseTerminals}
         onSplitVertical={() => undefined}
         onSplitHorizontal={() => undefined}
-        onCloseActivePane={onCloseActivePane}
         onRenameTab={() => undefined}
         activePaneAvailable
       />
     );
 
-    expect(screen.queryByRole('button', { name: 'Close Alpha' })).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Close pane' }));
-
-    expect(onCloseActivePane).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Close Alpha' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Close pane' })).toBeNull();
     expect(onCloseTerminals).not.toHaveBeenCalled();
   });
 
@@ -125,7 +126,6 @@ describe('TerminalTabs', () => {
         onCloseTerminals={() => undefined}
         onSplitVertical={() => undefined}
         onSplitHorizontal={() => undefined}
-        onCloseActivePane={() => undefined}
         onRenameTab={() => undefined}
         activePaneAvailable
       />
@@ -156,7 +156,6 @@ describe('TerminalTabs', () => {
         onCloseTerminals={() => undefined}
         onSplitVertical={() => undefined}
         onSplitHorizontal={() => undefined}
-        onCloseActivePane={() => undefined}
         onRenameTab={() => undefined}
         activePaneAvailable
       />
@@ -170,7 +169,6 @@ describe('TerminalTabs', () => {
   it('exposes compact active-pane actions in the tab bar', () => {
     const onSplitVertical = vi.fn();
     const onSplitHorizontal = vi.fn();
-    const onCloseActivePane = vi.fn();
     const tab: TerminalTabLayout = {
       id: 'tab-alpha',
       title: 'Alpha',
@@ -189,7 +187,6 @@ describe('TerminalTabs', () => {
         onCloseTerminals={() => undefined}
         onSplitVertical={onSplitVertical}
         onSplitHorizontal={onSplitHorizontal}
-        onCloseActivePane={onCloseActivePane}
         onRenameTab={() => undefined}
         activePaneAvailable
       />
@@ -197,14 +194,13 @@ describe('TerminalTabs', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Split right' }));
     fireEvent.click(screen.getByRole('button', { name: 'Split down' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Close pane' }));
 
     expect(onSplitVertical).toHaveBeenCalledOnce();
     expect(onSplitHorizontal).toHaveBeenCalledOnce();
-    expect(onCloseActivePane).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('button', { name: 'Close pane' })).toBeNull();
   });
 
-  it('places active-pane actions inside the active tab', () => {
+  it('places pane split actions at the top bar edge', () => {
     const tabs: TerminalTabLayout[] = [
       {
         id: 'tab-alpha',
@@ -234,18 +230,16 @@ describe('TerminalTabs', () => {
         onCloseTerminals={() => undefined}
         onSplitVertical={() => undefined}
         onSplitHorizontal={() => undefined}
-        onCloseActivePane={() => undefined}
         onRenameTab={() => undefined}
         activePaneAvailable
       />
     );
 
     const tabsInDom = document.querySelectorAll('.terminal-tab');
-    const activeTab = document.querySelector('.terminal-tab[data-active="true"]');
 
     expect(tabsInDom).toHaveLength(2);
-    expect(activeTab?.querySelector('.terminal-pane-actions')).not.toBeNull();
-    expect(activeTab?.nextElementSibling?.className).toBe('terminal-tab');
+    expect(document.querySelector('.terminal-tabs > .terminal-pane-actions')).not.toBeNull();
+    expect(document.querySelector('.terminal-tab[data-active="true"]')?.querySelector('.terminal-pane-actions')).toBeNull();
   });
 
   it('hides active-pane actions when there is no active pane', () => {
@@ -260,7 +254,6 @@ describe('TerminalTabs', () => {
         onCloseTerminals={() => undefined}
         onSplitVertical={() => undefined}
         onSplitHorizontal={() => undefined}
-        onCloseActivePane={() => undefined}
         onRenameTab={() => undefined}
         activePaneAvailable={false}
       />
@@ -291,7 +284,6 @@ describe('TerminalTabs', () => {
         onCloseTerminals={() => undefined}
         onSplitVertical={() => undefined}
         onSplitHorizontal={() => undefined}
-        onCloseActivePane={() => undefined}
         onRenameTab={onRenameTab}
         activePaneAvailable
       />
@@ -325,7 +317,6 @@ describe('TerminalTabs', () => {
         onCloseTerminals={() => undefined}
         onSplitVertical={() => undefined}
         onSplitHorizontal={() => undefined}
-        onCloseActivePane={() => undefined}
         onRenameTab={onRenameTab}
         activePaneAvailable
       />

@@ -12,12 +12,14 @@ const terminalFitSettleDelaysMs = [0, 50, 150, 350] as const;
 interface XtermPaneProps {
   terminal: TerminalSummary;
   active: boolean;
+  canClose: boolean;
   onSelect: () => void;
+  onClose: () => void;
   onExit: (exitCode: number | null) => void;
   onSnapshot: (terminal: TerminalSummary) => void;
 }
 
-export function XtermPane({ terminal, active, onSelect, onExit, onSnapshot }: XtermPaneProps) {
+export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExit, onSnapshot }: XtermPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -66,10 +68,10 @@ export function XtermPane({ terminal, active, onSelect, onExit, onSnapshot }: Xt
       fontWeightBold: 700,
       scrollback: 10_000,
       theme: {
-        background: '#101318',
-        foreground: '#d8dee9',
-        cursor: '#f6c177',
-        selectionBackground: '#344054'
+        background: '#0a0d10',
+        foreground: '#e2e8ee',
+        cursor: '#5eead4',
+        selectionBackground: '#1f3f45'
       }
     });
     const fit = new FitAddon();
@@ -307,6 +309,31 @@ export function XtermPane({ terminal, active, onSelect, onExit, onSnapshot }: Xt
 
   return (
     <section className="terminal-pane" data-active={active} onMouseDown={onSelect}>
+      <header className="terminal-pane-header">
+        <span className="terminal-pane-dot" aria-hidden="true" />
+        <span className="terminal-pane-cwd" title={terminal.cwd}>
+          {terminal.cwd}
+        </span>
+        <span className="terminal-pane-spacer" />
+        <span className={`terminal-pane-state terminal-pane-state-${terminal.status}`}>{terminal.status}</span>
+        {canClose ? (
+          <button
+            type="button"
+            className="terminal-pane-close"
+            aria-label={`Close pane ${terminal.title}`}
+            title="Close pane"
+            onMouseDown={(event) => {
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose();
+            }}
+          >
+            x
+          </button>
+        ) : null}
+      </header>
       <div className="xterm-container" ref={containerRef} />
     </section>
   );

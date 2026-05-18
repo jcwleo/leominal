@@ -29,6 +29,7 @@ export type TerminalAction =
   | { type: 'terminal.exited'; terminalId: TerminalId; exitCode: number | null }
   | { type: 'terminal.closed'; terminalId: TerminalId }
   | { type: 'pane.selected'; terminalId: TerminalId }
+  | { type: 'pane.resized'; path: number[]; ratio: number }
   | { type: 'tab.selected'; tabId: string }
   | { type: 'tab.renamed'; tabId: string; title: string }
   | { type: 'activePane.closed' };
@@ -68,6 +69,8 @@ export function terminalReducer(state: TerminalState, action: TerminalAction): T
       return removeTerminalPane(state, action.terminalId);
     case 'pane.selected':
       return selectPane(state, action.terminalId);
+    case 'pane.resized':
+      return resizePane(state, action.path, action.ratio);
     case 'tab.selected':
       return selectTab(state, action.tabId);
     case 'tab.renamed':
@@ -181,6 +184,7 @@ export function splitActivePane(
   const nextRoot = replacePane(activeTab.root, activeTerminalId, {
     type: 'split',
     direction,
+    ratio: 0.5,
     first: { type: 'pane', terminalId: activeTerminalId },
     second: { type: 'pane', terminalId: terminal.id }
   });
@@ -267,6 +271,31 @@ export function selectPane(state: TerminalState, terminalId: TerminalId): Termin
             ...workspace,
             activeTabId: owningTab.id,
             tabs: workspace.tabs.map((tab) => (tab.id === owningTab.id ? { ...tab, activeTerminalId: terminalId } : tab))
+          }
+        : workspace
+    )
+  };
+}
+
+export function resizePane(state: TerminalState, path: number[], ratio: number): TerminalState {
+  const activeWorkspace = getActiveWorkspace(state);
+  const activeTab = activeWorkspace ? getActiveTab(activeWorkspace) : undefined;
+  if (!activeWorkspace || !activeTab) {
+    return state;
+  }
+
+  const nextRoot = setRatioAtPath(activeTab.root, path, clampRatio(ratio));
+  if (nextRoot === activeTab.root) {
+    return state;
+  }
+
+  return {
+    ...state,
+    workspaces: state.workspaces.map((workspace) =>
+      workspace.id === activeWorkspace.id
+        ? {
+            ...workspace,
+            tabs: workspace.tabs.map((tab) => (tab.id === activeTab.id ? { ...tab, root: nextRoot } : tab))
           }
         : workspace
     )
@@ -543,7 +572,7 @@ function pruneLayout(root: LayoutNode, availableIds: Set<TerminalId>): LayoutNod
   const first = pruneLayout(root.first, availableIds);
   const second = pruneLayout(root.second, availableIds);
   if (first && second) {
-    return { ...root, first, second };
+    return { ...root, ratio: clampRatio(root.ratio), first, second };
   }
   return first ?? second;
 }
@@ -586,6 +615,29 @@ function isLayoutNode(value: unknown): value is LayoutNode {
     return (node.direction === 'horizontal' || node.direction === 'vertical') && isLayoutNode(node.first) && isLayoutNode(node.second);
   }
   return false;
+}
+
+function setRatioAtPath(root: LayoutNode, path: number[], ratio: number): LayoutNode {
+  if (root.type === 'pane') {
+    return root;
+  }
+  if (path.length === 0) {
+    return root.ratio === ratio ? root : { ...root, ratio };
+  }
+  const [head, ...rest] = path;
+  if (head === 0) {
+    const first = setRatioAtPath(root.first, rest, ratio);
+    return first === root.first ? root : { ...root, first };
+  }
+  if (head === 1) {
+    const second = setRatioAtPath(root.second, rest, ratio);
+    return second === root.second ? root : { ...root, second };
+  }
+  return root;
+}
+
+function clampRatio(ratio: number): number {
+  return Number.isFinite(ratio) ? Math.min(0.9, Math.max(0.1, ratio)) : 0.5;
 }
 
 function containsTerminal(root: LayoutNode, terminalId: TerminalId): boolean {

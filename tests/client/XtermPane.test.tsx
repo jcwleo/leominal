@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TerminalSummary } from '../../src/shared/types.js';
@@ -143,6 +143,8 @@ function renderPane(props: Partial<React.ComponentProps<typeof XtermPane>> = {})
       onSelect={() => undefined}
       onExit={() => undefined}
       onSnapshot={onSnapshot}
+      canClose={false}
+      onClose={() => undefined}
       {...props}
     />
   );
@@ -255,5 +257,18 @@ describe('XtermPane', () => {
     await waitFor(() =>
       expect(resizeMessages([socket])).toContainEqual({ type: 'resize', terminalId: 'term-alpha', cols: 96, rows: 27 })
     );
+  });
+
+  it('renders a pane header close affordance that does not select the pane', () => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+
+    renderPane({ onSelect, onClose, canClose: true });
+
+    expect(screen.getByText('/workspace')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Close pane Alpha' }));
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

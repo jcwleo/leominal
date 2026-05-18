@@ -1,6 +1,7 @@
 import React, { type FormEvent, useEffect, useMemo, useState } from 'react';
 import type { AuthSessionStatus } from '../../shared/types.js';
 import { createApiClient, type ApiClient } from '../api/client.js';
+import { LeominalMark } from '../terminal/LeominalMark.js';
 import { TerminalWorkspace } from '../terminal/TerminalWorkspace.js';
 
 interface AuthGateProps {
@@ -68,11 +69,21 @@ export function AuthGate({ api: providedApi }: AuthGateProps) {
 
   return (
     <main className="auth-screen">
+      <div className="auth-background" aria-hidden="true">
+        <div className="auth-grid" />
+        <div className="auth-glow" />
+      </div>
       <section className="auth-panel" aria-busy={view === 'loading'}>
-        <div>
-          <p className="eyebrow">Leominal</p>
+        <header className="auth-header">
+          <div className="auth-brand">
+            <LeominalMark size={26} />
+            <div>
+              <p className="eyebrow">Leominal</p>
+              <p className="auth-host">local terminal</p>
+            </div>
+          </div>
           <h1>{view === 'setup' ? 'Set password' : view === 'login' ? 'Unlock terminal' : 'Terminal'}</h1>
-        </div>
+        </header>
         {error ? <p className="form-error">{error}</p> : null}
         {view === 'loading' ? <p className="muted">Checking session...</p> : null}
         {view === 'loading' && error ? (
