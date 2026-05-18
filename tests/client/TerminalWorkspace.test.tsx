@@ -354,8 +354,11 @@ describe('TerminalWorkspace', () => {
       fireEvent.keyDown(shell, { key: 'ArrowLeft', metaKey: true, altKey: true });
       await waitFor(() => expect(screen.getByText('Alpha')).toBeVisible());
 
+      fireEvent.keyDown(shell, { key: '2', metaKey: true, altKey: true });
+      await waitFor(() => expect(screen.getByText('Beta')).toBeVisible());
+
       fireEvent.keyDown(shell, { key: '9', metaKey: true });
-      expect(screen.getByText('Alpha')).toBeVisible();
+      expect(screen.getByText('Beta')).toBeVisible();
     } finally {
       document.removeEventListener('keydown', bubbled);
     }

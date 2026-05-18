@@ -673,6 +673,9 @@ function parseWorkspaceShortcut(event: React.KeyboardEvent<HTMLElement>): Worksp
 
   if (event.altKey) {
     const direction = arrowDirection(event.key);
+    if (digit !== null) {
+      return { type: 'pane.index', index: digit };
+    }
     return direction ? { type: 'pane.direction', direction } : null;
   }
 
