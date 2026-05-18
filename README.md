@@ -4,6 +4,8 @@
 
 Leominal is a personal web terminal for a machine you own. It serves a browser UI and connects it to real host PTYs, giving you terminal tabs, split panes, reconnect after refresh, and a home-screen friendly iPad experience without running a full IDE.
 
+<img src="docs/assets/leominal-workspace.png" alt="Leominal workspace with split terminal panes" width="100%">
+
 > Leominal opens your host shell in a browser. Publish the source if you want, but do not expose a live Leominal instance directly to the public internet. Use localhost, a private VPN, or a real HTTPS access boundary in front of it.
 
 Leominal is not a hosted shell product, not a SaaS app, and not a multi-user access system. Treat it like opening your server shell from a browser.
