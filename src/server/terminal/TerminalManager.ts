@@ -119,6 +119,14 @@ export class TerminalManager {
     return this.terminals.get(id)?.output.snapshot() ?? null;
   }
 
+  async resolveTerminalCwd(id: TerminalId): Promise<string | null> {
+    const record = this.terminals.get(id);
+    if (!record?.pty || record.summary.status !== 'running') {
+      return null;
+    }
+    return this.safeResolveCwd(record.pty.pid);
+  }
+
   attachTerminal(id: TerminalId, subscriber: TerminalSubscriber, options: AttachTerminalOptions = {}): TerminalAttachment | null {
     const record = this.terminals.get(id);
     if (!record) {

@@ -30,6 +30,32 @@ export interface UpdateTerminalLayoutRequest {
   baseRevision?: number;
 }
 
+export interface UploadManifestEntry {
+  fieldName: string;
+  relativePath: string;
+  size: number;
+}
+
+export interface UploadManifest {
+  terminalId: TerminalId;
+  entries: UploadManifestEntry[];
+}
+
+export interface UploadResultEntry {
+  relativePath: string;
+  savedRelativePath?: string;
+  status: 'uploaded' | 'failed';
+  size?: number;
+  error?: string;
+}
+
+export interface UploadResponse {
+  destinationCwd: string;
+  uploaded: number;
+  failed: number;
+  results: UploadResultEntry[];
+}
+
 export type ClientTerminalMessage =
   | { type: 'input'; terminalId: TerminalId; data: string }
   | { type: 'resize'; terminalId: TerminalId; cols: number; rows: number }

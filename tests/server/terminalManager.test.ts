@@ -15,7 +15,10 @@ function testConfig(): AppConfig {
     cookieSecure: false,
     allowedOrigins: ['http://127.0.0.1:3107'],
     staticRoot: '/tmp/static',
-    isProduction: false
+    isProduction: false,
+    uploadMaxFiles: 1024,
+    uploadMaxFileBytes: 536_870_912,
+    uploadMaxBatchBytes: 2_147_483_648
   };
 }
 
@@ -228,6 +231,37 @@ describe('TerminalManager', () => {
       '/workspace/root/packages/app',
       '/workspace/root'
     ]);
+  });
+
+  it('resolves upload destinations from the live running PTY cwd', async () => {
+    const adapter = new FakePtyAdapter();
+    const resolveCwd = vi.fn(async (pid: number) => (pid === 10_000 ? '/workspace/root/live-cwd' : null));
+    const manager = new TerminalManager(testConfig(), adapter, { resolveCwd });
+    const terminal = await manager.createTerminal();
+
+    const cwd = await manager.resolveTerminalCwd(terminal.id);
+
+    expect(cwd).toBe('/workspace/root/live-cwd');
+    expect(resolveCwd).toHaveBeenLastCalledWith(10_000);
+  });
+
+  it('fails closed when an upload destination cwd cannot be resolved', async () => {
+    const adapter = new FakePtyAdapter();
+    const resolveCwd = vi.fn(async () => {
+      throw new Error('cwd unavailable');
+    });
+    const manager = new TerminalManager(testConfig(), adapter, { resolveCwd });
+    const terminal = await manager.createTerminal();
+    adapter.processes[0]!.emitExit(0);
+
+    await expect(manager.resolveTerminalCwd('missing-terminal')).resolves.toBeNull();
+    await expect(manager.resolveTerminalCwd(terminal.id)).resolves.toBeNull();
+    expect(resolveCwd).toHaveBeenCalledTimes(0);
+
+    const running = await manager.createTerminal();
+
+    await expect(manager.resolveTerminalCwd(running.id)).resolves.toBeNull();
+    expect(resolveCwd).toHaveBeenCalledTimes(1);
   });
 
   it('closes all active terminals for logout cleanup', async () => {

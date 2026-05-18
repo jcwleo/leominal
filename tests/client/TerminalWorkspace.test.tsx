@@ -15,6 +15,12 @@ import type { AuthSessionStatus, TerminalId, TerminalLayoutState, TerminalSummar
 import { ApiError } from '../../src/client/api/client.js';
 import type { ApiClient } from '../../src/client/api/client.js';
 
+const uploadFilesMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../../src/client/api/uploadClient.js', () => ({
+  uploadFiles: uploadFilesMock
+}));
+
 vi.mock('../../src/client/terminal/SplitPane.js', () => ({
   SplitPane: ({ onClose, onResize }: { onClose?: (terminalId: string) => void; onResize?: (path: number[], ratio: number) => void }) => (
     <div data-testid="split-pane">
@@ -123,7 +129,22 @@ describe('TerminalWorkspace', () => {
   afterEach(cleanup);
 
   beforeEach(() => {
-    localStorage.clear();
+    const storage = memoryStorage();
+    Object.defineProperty(window, 'localStorage', {
+      value: storage,
+      configurable: true
+    });
+    Object.defineProperty(globalThis, 'localStorage', {
+      value: storage,
+      configurable: true
+    });
+    uploadFilesMock.mockReset();
+    uploadFilesMock.mockResolvedValue({
+      destinationCwd: '/workspace/term-alpha',
+      uploaded: 1,
+      failed: 0,
+      results: [{ relativePath: 'notes.txt', savedRelativePath: 'notes.txt', status: 'uploaded', size: 5 }]
+    });
   });
 
   it('renders a cmux-style shell around the active terminal', async () => {
@@ -414,4 +435,144 @@ describe('TerminalWorkspace', () => {
 
     await waitFor(() => expect(api.saveTerminalLayout).toHaveBeenCalledTimes(2));
   });
+
+  it('shows a popup failure when files are dropped without an active pane', async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha')]);
+
+    render(<TerminalWorkspace api={api} />);
+
+    const workspaces = await screen.findByRole('navigation', { name: 'Workspaces' });
+    fireEvent.click(within(workspaces).getByRole('button', { name: 'New workspace' }));
+    fireEvent.click(within(workspaces).getByRole('button', { name: /^Workspace 2/ }));
+
+    fireEvent.drop(screen.getByRole('main'), dropFiles([new File(['hello'], 'notes.txt')]));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('No active running terminal');
+    expect(uploadFilesMock).not.toHaveBeenCalled();
+  });
+
+  it('uploads dropped files to the active running terminal captured at drop time', async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha')]);
+    const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+
+    render(<TerminalWorkspace api={api} />);
+
+    await screen.findByTestId('split-pane');
+    fireEvent.drop(screen.getByRole('main'), dropFiles([file]));
+
+    await waitFor(() => {
+      expect(uploadFilesMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          terminalId: 'term-alpha',
+          files: [{ relativePath: 'notes.txt', file }]
+        })
+      );
+    });
+  });
+
+  it('renders upload progress and partial results in the popup', async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha')]);
+    let resolveUpload: ((value: unknown) => void) | null = null;
+    uploadFilesMock.mockImplementation(({ onProgress }: { onProgress?: (progress: { loaded: number; total: number; percent: number }) => void }) => {
+      onProgress?.({ loaded: 5, total: 10, percent: 50 });
+      return new Promise((resolve) => {
+        resolveUpload = resolve;
+      });
+    });
+
+    render(<TerminalWorkspace api={api} />);
+
+    await screen.findByTestId('split-pane');
+    fireEvent.drop(screen.getByRole('main'), dropFiles([new File(['hello'], 'notes.txt')]));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('50%');
+
+    const finishUpload = resolveUpload as ((value: unknown) => void) | null;
+    if (!finishUpload) {
+      throw new Error('Upload promise was not started.');
+    }
+    finishUpload({
+      destinationCwd: '/workspace/term-alpha',
+      uploaded: 1,
+      failed: 1,
+      results: [
+        { relativePath: 'notes.txt', savedRelativePath: 'notes 2.txt', status: 'uploaded', size: 5 },
+        { relativePath: 'private.txt', status: 'failed', error: 'permission denied' }
+      ]
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Uploaded 1 of 2 files');
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('/workspace/term-alpha');
+    expect(screen.getByText('notes 2.txt')).toBeVisible();
+    expect(screen.getByText('private.txt')).toBeVisible();
+    expect(screen.getAllByText('permission denied').length).toBeGreaterThan(0);
+  });
+
+  it('prioritizes failed upload results even when they are after the first five entries', async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha')]);
+    uploadFilesMock.mockResolvedValueOnce({
+      destinationCwd: '/workspace/term-alpha',
+      uploaded: 5,
+      failed: 1,
+      results: [
+        { relativePath: 'ok-1.txt', savedRelativePath: 'ok-1.txt', status: 'uploaded', size: 1 },
+        { relativePath: 'ok-2.txt', savedRelativePath: 'ok-2.txt', status: 'uploaded', size: 1 },
+        { relativePath: 'ok-3.txt', savedRelativePath: 'ok-3.txt', status: 'uploaded', size: 1 },
+        { relativePath: 'ok-4.txt', savedRelativePath: 'ok-4.txt', status: 'uploaded', size: 1 },
+        { relativePath: 'ok-5.txt', savedRelativePath: 'ok-5.txt', status: 'uploaded', size: 1 },
+        { relativePath: 'blocked.txt', status: 'failed', error: 'permission denied' }
+      ]
+    });
+
+    render(<TerminalWorkspace api={api} />);
+
+    await screen.findByTestId('split-pane');
+    fireEvent.drop(screen.getByRole('main'), dropFiles([new File(['hello'], 'notes.txt')]));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Uploaded 5 of 6 files');
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('permission denied');
+    expect(screen.getByText('blocked.txt')).toBeVisible();
+  });
 });
+
+function dropFiles(files: File[]): { dataTransfer: DataTransfer } {
+  return {
+    dataTransfer: {
+      types: ['Files'],
+      items: [],
+      files: fileList(files)
+    } as unknown as DataTransfer
+  };
+}
+
+function fileList(files: File[]): FileList {
+  return {
+    length: files.length,
+    item: (index: number) => files[index] ?? null,
+    [Symbol.iterator]: function* () {
+      yield* files;
+    }
+  } as FileList;
+}
+
+function memoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key: string) => values.get(key) ?? null,
+    key: (index: number) => Array.from(values.keys())[index] ?? null,
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    }
+  };
+}

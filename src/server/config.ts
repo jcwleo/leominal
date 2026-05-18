@@ -14,6 +14,9 @@ export interface AppConfig {
   allowedOrigins: string[];
   staticRoot: string;
   isProduction: boolean;
+  uploadMaxFiles: number;
+  uploadMaxFileBytes: number;
+  uploadMaxBatchBytes: number;
 }
 
 export interface ConfigEnv {
@@ -91,6 +94,9 @@ export function loadConfig(env: ConfigEnv = process.env): AppConfig {
   const workspaceRoot = path.resolve(expandHomePath(env.LEOMINAL_WORKSPACE_ROOT?.trim() || process.cwd()));
   const statePath = path.resolve(env.LEOMINAL_STATE_PATH?.trim() || '.leominal/state.json');
   const sessionTtlSeconds = readInt(env.LEOMINAL_SESSION_TTL_SECONDS, 43_200, 'LEOMINAL_SESSION_TTL_SECONDS');
+  const uploadMaxFiles = readInt(env.LEOMINAL_UPLOAD_MAX_FILES, 1024, 'LEOMINAL_UPLOAD_MAX_FILES');
+  const uploadMaxFileBytes = readInt(env.LEOMINAL_UPLOAD_MAX_FILE_BYTES, 536_870_912, 'LEOMINAL_UPLOAD_MAX_FILE_BYTES');
+  const uploadMaxBatchBytes = readInt(env.LEOMINAL_UPLOAD_MAX_BATCH_BYTES, 2_147_483_648, 'LEOMINAL_UPLOAD_MAX_BATCH_BYTES');
   const isProduction = env.NODE_ENV === 'production';
   return {
     host,
@@ -103,7 +109,10 @@ export function loadConfig(env: ConfigEnv = process.env): AppConfig {
     cookieSecure: env.LEOMINAL_COOKIE_SECURE === 'true' || (isProduction && env.LEOMINAL_COOKIE_SECURE !== 'false'),
     allowedOrigins: parseOrigins(env.LEOMINAL_ALLOWED_ORIGINS, host, port),
     staticRoot: path.resolve(env.LEOMINAL_STATIC_ROOT?.trim() || 'dist/client'),
-    isProduction
+    isProduction,
+    uploadMaxFiles,
+    uploadMaxFileBytes,
+    uploadMaxBatchBytes
   };
 }
 
