@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { isTerminalTabLayout, normalizeTerminalLayoutState } from '../../shared/layoutState.js';
 import type { TerminalId, TerminalLayoutState, TerminalSummary, TerminalTabLayout, TerminalWorkspaceLayout } from '../../shared/types.js';
 import { ApiError, type ApiClient, createApiClient } from '../api/client.js';
+import { uploadFiles } from '../api/uploadClient.js';
 import { LeominalMark } from './LeominalMark.js';
 import { SplitPane } from './SplitPane.js';
 import { TerminalTabs } from './TerminalTabs.js';
+import { UploadToast, type UploadToastModel } from './UploadToast.js';
 import {
   getDirectionalPaneTarget,
   getNextPaneTarget,
@@ -21,6 +23,7 @@ import {
   type TerminalAction,
   terminalReducer
 } from './terminalReducer.js';
+import { collectUploadDrop, hasFileDrop } from './uploadDrop.js';
 
 const layoutStorageKey = 'leominal.terminalLayout.v1';
 const workspaceStorageKey = 'leominal.terminalWorkspaces.v2';
@@ -47,6 +50,7 @@ export function TerminalWorkspace({
   const [editingWorkspace, setEditingWorkspace] = useState<{ workspaceId: string; title: string } | null>(null);
   const workspaceEditInputRef = useRef<HTMLInputElement | null>(null);
   const workspaceRenameCancelledRef = useRef(false);
+  const uploadIdRef = useRef(0);
   const stateRef = useRef(state);
   const layoutRevisionRef = useRef<number | null>(null);
   const lastPersistedLayoutJsonRef = useRef<string | null>(null);
@@ -57,6 +61,7 @@ export function TerminalWorkspace({
   const activeWorkspace = state.workspaces.find((workspace) => workspace.id === state.activeWorkspaceId) ?? state.workspaces[0];
   const activeTab = activeWorkspace?.tabs.find((tab) => tab.id === activeWorkspace.activeTabId) ?? activeWorkspace?.tabs[0];
   const activeTerminalId = activeTab?.activeTerminalId ?? null;
+  const [uploadToast, setUploadToast] = useState<UploadToastModel | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -288,6 +293,100 @@ export function TerminalWorkspace({
     }
   }
 
+  function handleWorkspaceDragOver(event: React.DragEvent<HTMLElement>) {
+    if (!hasFileDrop(event.dataTransfer)) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  }
+
+  function handleWorkspaceDrop(event: React.DragEvent<HTMLElement>) {
+    if (!hasFileDrop(event.dataTransfer)) {
+      return;
+    }
+    event.preventDefault();
+
+    const terminal = getActiveRunningTerminal(stateRef.current);
+    const uploadId = uploadIdRef.current + 1;
+    uploadIdRef.current = uploadId;
+
+    if (!terminal) {
+      setUploadToast({
+        id: uploadId,
+        status: 'failed',
+        fileCount: 0,
+        message: 'No active running terminal is available for upload.'
+      });
+      return;
+    }
+
+    setUploadToast({
+      id: uploadId,
+      status: 'queued',
+      fileCount: 0,
+      message: 'Preparing upload...'
+    });
+    void runDroppedUpload(uploadId, terminal.id, event.dataTransfer);
+  }
+
+  async function runDroppedUpload(uploadId: number, terminalId: TerminalId, dataTransfer: DataTransfer) {
+    try {
+      const files = await collectUploadDrop(dataTransfer);
+      if (files.length === 0) {
+        throw new Error('No files were found in the drop.');
+      }
+
+      updateUploadToast(uploadId, {
+        id: uploadId,
+        status: 'uploading',
+        fileCount: files.length,
+        loaded: 0,
+        total: null,
+        percent: null
+      });
+
+      const response = await uploadFiles({
+        terminalId,
+        files,
+        onProgress: (progress) => {
+          updateUploadToast(uploadId, {
+            id: uploadId,
+            status: 'uploading',
+            fileCount: files.length,
+            loaded: progress.loaded,
+            total: progress.total,
+            percent: progress.percent
+          });
+        }
+      });
+
+      const uploadStatus = response.failed > 0 ? (response.uploaded > 0 ? 'partial' : 'failed') : 'success';
+      const uploadError = response.failed > 0 ? firstUploadError(response) : undefined;
+      const resultToast: UploadToastModel = {
+        id: uploadId,
+        status: uploadStatus,
+        fileCount: files.length,
+        response
+      };
+      if (uploadError) {
+        resultToast.message = uploadError;
+      }
+      updateUploadToast(uploadId, resultToast);
+    } catch (caught) {
+      updateUploadToast(uploadId, {
+        id: uploadId,
+        status: 'failed',
+        fileCount: 0,
+        message: errorMessage(caught)
+      });
+    }
+  }
+
+  function updateUploadToast(uploadId: number, toast: UploadToastModel) {
+    setUploadToast((current) => (current?.id === uploadId ? toast : current));
+  }
+
   function queueLayoutSave(layout: TerminalLayoutState) {
     pendingLayoutSaveRef.current = layout;
     writeSavedLayout(layout);
@@ -369,7 +468,14 @@ export function TerminalWorkspace({
   const showSidebarDetails = !sidebarCollapsed || sidebarOpen;
 
   return (
-    <main className="terminal-shell" data-collapsed={sidebarCollapsed} data-sidebar-open={sidebarOpen} onKeyDownCapture={handleWorkspaceKeyDown}>
+    <main
+      className="terminal-shell"
+      data-collapsed={sidebarCollapsed}
+      data-sidebar-open={sidebarOpen}
+      onKeyDownCapture={handleWorkspaceKeyDown}
+      onDragOver={handleWorkspaceDragOver}
+      onDrop={handleWorkspaceDrop}
+    >
       <button type="button" className="workspace-backdrop" aria-label="Close workspaces" onClick={() => setSidebarOpen(false)} />
       <aside className="workspace-sidebar">
         <header className="workspace-brand">
@@ -542,6 +648,7 @@ export function TerminalWorkspace({
         {activeWorkspace && activeTab ? (
           <StatusBar activeTerminal={activeTerminalId ? state.terminals[activeTerminalId] : undefined} tab={activeTab} tabCount={activeWorkspace.tabs.length} />
         ) : null}
+        <UploadToast toast={uploadToast} onDismiss={() => setUploadToast(null)} />
       </section>
     </main>
   );
@@ -724,6 +831,17 @@ function writeSavedLayout(layout: TerminalLayoutState) {
     return;
   }
   localStorage.removeItem(workspaceStorageKey);
+}
+
+function getActiveRunningTerminal(state: ReturnType<typeof createEmptyTerminalState>): TerminalSummary | null {
+  const workspace = state.workspaces.find((candidate) => candidate.id === state.activeWorkspaceId) ?? state.workspaces[0];
+  const tab = workspace?.tabs.find((candidate) => candidate.id === workspace.activeTabId) ?? workspace?.tabs[0];
+  const terminal = tab ? state.terminals[tab.activeTerminalId] : undefined;
+  return terminal?.status === 'running' ? terminal : null;
+}
+
+function firstUploadError(response: { results: Array<{ status: 'uploaded' | 'failed'; error?: string }> }): string | undefined {
+  return response.results.find((result) => result.status === 'failed' && result.error)?.error;
 }
 
 function readSidebarCollapsed(): boolean {

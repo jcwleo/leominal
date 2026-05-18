@@ -42,6 +42,25 @@ describe('loadConfig', () => {
     expect(config.cookieSecure).toBe(true);
   });
 
+  it('configures upload limits with safe defaults and environment overrides', () => {
+    const defaults = loadConfig(testEnv());
+    expect(defaults.uploadMaxFiles).toBe(1024);
+    expect(defaults.uploadMaxFileBytes).toBe(536_870_912);
+    expect(defaults.uploadMaxBatchBytes).toBe(2_147_483_648);
+
+    const config = loadConfig(
+      testEnv({
+        LEOMINAL_UPLOAD_MAX_FILES: '12',
+        LEOMINAL_UPLOAD_MAX_FILE_BYTES: '4096',
+        LEOMINAL_UPLOAD_MAX_BATCH_BYTES: '8192'
+      })
+    );
+
+    expect(config.uploadMaxFiles).toBe(12);
+    expect(config.uploadMaxFileBytes).toBe(4096);
+    expect(config.uploadMaxBatchBytes).toBe(8192);
+  });
+
   it('expands tilde workspace paths for local env files', () => {
     const config = loadConfig(
       testEnv({
@@ -55,6 +74,9 @@ describe('loadConfig', () => {
   it('rejects invalid numeric settings', () => {
     expect(() => loadConfig(testEnv({ LEOMINAL_PORT: '0' }))).toThrow(/LEOMINAL_PORT/);
     expect(() => loadConfig(testEnv({ LEOMINAL_SESSION_TTL_SECONDS: '1.5' }))).toThrow(/LEOMINAL_SESSION_TTL_SECONDS/);
+    expect(() => loadConfig(testEnv({ LEOMINAL_UPLOAD_MAX_FILES: '-1' }))).toThrow(/LEOMINAL_UPLOAD_MAX_FILES/);
+    expect(() => loadConfig(testEnv({ LEOMINAL_UPLOAD_MAX_FILE_BYTES: '0' }))).toThrow(/LEOMINAL_UPLOAD_MAX_FILE_BYTES/);
+    expect(() => loadConfig(testEnv({ LEOMINAL_UPLOAD_MAX_BATCH_BYTES: 'NaN' }))).toThrow(/LEOMINAL_UPLOAD_MAX_BATCH_BYTES/);
   });
 
   it('requires secrets outside test mode', () => {

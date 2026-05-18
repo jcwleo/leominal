@@ -17,6 +17,7 @@ Leominal is not a hosted shell product, not a SaaS app, and not a multi-user acc
 - Spawns real host shells through `node-pty`.
 - Supports multiple terminal tabs and split panes.
 - Reattaches to active PTYs after refresh or temporary WebSocket reconnects.
+- Uploads dropped files or folders into the active terminal pane's current working directory.
 - Stores a first-run password hash in a local state file.
 - Uses same-origin cookies and origin checks for mutating routes and terminal WebSockets.
 - Includes production-style local service commands.
@@ -47,6 +48,12 @@ Public internet
 ```
 
 For remote access, keep Leominal bound to `127.0.0.1` when possible and put a private VPN, SSH tunnel, or authenticated HTTPS reverse proxy in front of it. Set `LEOMINAL_COOKIE_SECURE=true` when serving through HTTPS.
+
+## Drag And Drop Uploads
+
+Drop files or folders onto the terminal workspace to upload them into the active pane's current working directory. Folder drops keep the dropped folder name and preserve internal paths. Existing files are not overwritten; Leominal writes a renamed copy such as `name 2.ext` or `folder 2` when a collision exists.
+
+Upload progress and partial failures appear in the bottom-right terminal popup. Successful files remain in place when another file in the same batch fails. Folder uploads depend on browser support for directory drag-and-drop; unsupported folder drops fail visibly instead of flattening the folder.
 
 ## Requirements
 
@@ -122,6 +129,9 @@ LEOMINAL_HOST=127.0.0.1
 LEOMINAL_PORT=3107
 LEOMINAL_ALLOWED_ORIGINS=http://127.0.0.1:3107,http://localhost:3107
 LEOMINAL_COOKIE_SECURE=false
+LEOMINAL_UPLOAD_MAX_FILES=1024
+LEOMINAL_UPLOAD_MAX_FILE_BYTES=536870912
+LEOMINAL_UPLOAD_MAX_BATCH_BYTES=2147483648
 ```
 
 Change these when needed:
@@ -131,6 +141,9 @@ Change these when needed:
 - `LEOMINAL_STATE_PATH`: move the password/layout state file.
 - `LEOMINAL_ALLOWED_ORIGINS`: add the exact HTTPS or VPN URL you use in the browser.
 - `LEOMINAL_COOKIE_SECURE`: set to `true` when the browser reaches Leominal through HTTPS.
+- `LEOMINAL_UPLOAD_MAX_FILES`: limit files accepted in one drag-and-drop upload.
+- `LEOMINAL_UPLOAD_MAX_FILE_BYTES`: limit each uploaded file in bytes.
+- `LEOMINAL_UPLOAD_MAX_BATCH_BYTES`: limit total bytes in one drag-and-drop upload.
 
 Example for an HTTPS reverse proxy:
 
@@ -156,6 +169,9 @@ Configuration comes from `.env` or process environment variables.
 | `LEOMINAL_SESSION_TTL_SECONDS` | `43200` | Session lifetime in seconds. |
 | `LEOMINAL_COOKIE_SECURE` | `false` locally | Set `true` when serving through HTTPS. |
 | `LEOMINAL_ALLOWED_ORIGINS` | local origins | Comma-separated browser origins allowed for mutating requests. |
+| `LEOMINAL_UPLOAD_MAX_FILES` | `1024` | Maximum files accepted in one drag-and-drop upload. |
+| `LEOMINAL_UPLOAD_MAX_FILE_BYTES` | `536870912` | Maximum bytes accepted for one uploaded file. |
+| `LEOMINAL_UPLOAD_MAX_BATCH_BYTES` | `2147483648` | Maximum total bytes accepted for one upload batch. |
 | `LEOMINAL_PID_PATH` | `.leominal/leominal.pid` | PID file for the control script. |
 | `LEOMINAL_LOG_PATH` | `.leominal/leominal.log` | Log file for the control script. |
 
