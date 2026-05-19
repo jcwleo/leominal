@@ -876,6 +876,35 @@ input {
   color: var(--leo-accent);
 }
 
+.terminal-status-reload-button {
+  display: grid;
+  width: 20px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid var(--leo-line-2);
+  border-radius: 4px;
+  padding: 0;
+  color: var(--leo-fg-2);
+  background: transparent;
+  cursor: pointer;
+}
+
+.terminal-status-reload-icon {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.terminal-status-reload-button:hover:not(:disabled) {
+  border-color: rgba(94, 234, 212, 0.55);
+  color: var(--leo-fg);
+  background: var(--leo-accent-soft);
+}
+
 .upload-toast {
   position: absolute;
   right: 16px;

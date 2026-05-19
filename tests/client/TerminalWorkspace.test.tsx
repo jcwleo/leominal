@@ -199,6 +199,18 @@ describe('TerminalWorkspace', () => {
     }
   });
 
+  it('reloads the app from the status bar reload button', async () => {
+    const api = createApi();
+    const onReload = vi.fn();
+
+    render(<TerminalWorkspace api={api} onReload={onReload} />);
+
+    await screen.findByRole('navigation', { name: 'Workspaces' });
+    fireEvent.click(screen.getByRole('button', { name: 'Reload app' }));
+
+    expect(onReload).toHaveBeenCalledOnce();
+  });
+
   it('creates a terminal from the top tab bar add button', async () => {
     const api = createApi();
 

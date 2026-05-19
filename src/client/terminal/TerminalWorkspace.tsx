@@ -34,12 +34,14 @@ interface TerminalWorkspaceProps {
   api?: ApiClient;
   sessionExpiresAt?: string | null;
   onLogout?: () => Promise<void>;
+  onReload?: () => void;
 }
 
 export function TerminalWorkspace({
   api: providedApi,
   sessionExpiresAt = null,
-  onLogout = async () => undefined
+  onLogout = async () => undefined,
+  onReload = reloadApp
 }: TerminalWorkspaceProps) {
   const api = useMemo(() => providedApi ?? createApiClient(), [providedApi]);
   const [state, dispatch] = useReducer(terminalReducer, undefined, createEmptyTerminalState);
@@ -646,7 +648,12 @@ export function TerminalWorkspace({
           ) : null}
         </section>
         {activeWorkspace && activeTab ? (
-          <StatusBar activeTerminal={activeTerminalId ? state.terminals[activeTerminalId] : undefined} tab={activeTab} tabCount={activeWorkspace.tabs.length} />
+          <StatusBar
+            activeTerminal={activeTerminalId ? state.terminals[activeTerminalId] : undefined}
+            tab={activeTab}
+            tabCount={activeWorkspace.tabs.length}
+            onReload={onReload}
+          />
         ) : null}
         <UploadToast toast={uploadToast} onDismiss={() => setUploadToast(null)} />
       </section>
@@ -757,11 +764,13 @@ function EmptyWorkspace({ onCreate }: { onCreate: () => void }) {
 function StatusBar({
   activeTerminal,
   tab,
-  tabCount
+  tabCount,
+  onReload
 }: {
   activeTerminal: TerminalSummary | undefined;
   tab: TerminalTabLayout;
   tabCount: number;
+  onReload: () => void;
 }) {
   const paneCount = listTabTerminalIds(tab).length;
   return (
@@ -777,8 +786,18 @@ function StatusBar({
       </span>
       <span className="terminal-status-separator">·</span>
       <span className="terminal-status-connected">● connected</span>
+      <button type="button" className="terminal-status-reload-button" aria-label="Reload app" title="Reload app" onClick={onReload}>
+        <svg className="terminal-status-reload-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <path d="M12.9 7.1a4.9 4.9 0 1 0-1.4 3.4" />
+          <path d="M12.9 3.8v3.3H9.6" />
+        </svg>
+      </button>
     </footer>
   );
+}
+
+function reloadApp() {
+  window.location.reload();
 }
 
 interface SavedLayoutResult {

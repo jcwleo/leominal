@@ -35,12 +35,21 @@ export async function buildApp(config: AppConfig, services: BuildAppServices): P
   await registerUploadRoutes(app, config, services);
   await registerTerminalWebSocket(app, config, services);
 
+  app.addHook('onSend', async (_request, reply, payload) => {
+    const contentType = reply.getHeader('content-type');
+    if (typeof contentType === 'string' && contentType.includes('text/html')) {
+      reply.header('Cache-Control', 'no-store');
+    }
+    return payload;
+  });
+
   await app.register(fastifyStatic, {
     root: config.staticRoot,
     prefix: '/'
   });
 
   app.setNotFoundHandler(async (_request, reply) => {
+    reply.header('Cache-Control', 'no-store');
     return reply.sendFile('index.html', path.resolve(config.staticRoot));
   });
 

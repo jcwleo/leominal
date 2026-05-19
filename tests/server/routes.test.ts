@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import fastifyWebsocket from '@fastify/websocket';
@@ -421,6 +421,37 @@ describe('terminal routes', () => {
     await closePromise;
 
     expect(snapshot).toMatchObject({ type: 'snapshot', output: ['ready'] });
+  });
+});
+
+describe('static app shell routes', () => {
+  let app: FastifyInstance | null = null;
+
+  afterEach(async () => {
+    await app?.close();
+    app = null;
+  });
+
+  it('serves the app shell without browser storage caching', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'leominal-static-'));
+    await writeFile(path.join(dir, 'index.html'), '<!doctype html><div id="root"></div>');
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      LEOMINAL_STATE_PATH: path.join(dir, 'state.json'),
+      LEOMINAL_STATIC_ROOT: dir,
+      LEOMINAL_ALLOWED_ORIGINS: 'http://127.0.0.1:3107',
+      LEOMINAL_SESSION_SECRET: 'session-secret-with-enough-length'
+    });
+    const store = new FileStore(config.statePath);
+    await store.init();
+    const authService = new AuthService(config, store);
+    const terminalManager = new TerminalManager(config, {} as never);
+    app = await buildApp(config, { authService, terminalManager, fileStore: store });
+
+    const response = await app.inject({ method: 'GET', url: '/' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
   });
 });
 
