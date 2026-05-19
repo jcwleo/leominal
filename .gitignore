@@ -3,6 +3,7 @@ dist/
 coverage/
 playwright-report/
 test-results/
+design_handoff_terminal_minimal/
 
 # local secrets and runtime state
 .env

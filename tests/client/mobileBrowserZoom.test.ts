@@ -48,4 +48,22 @@ describe('mobile browser zoom guard', () => {
     expect(document.dispatchEvent(twoFingerMove)).toBe(false);
     expect(twoFingerMove.defaultPrevented).toBe(true);
   });
+
+  it('prevents single-touch page panning after the client starts', async () => {
+    Object.defineProperty(Navigator.prototype, 'maxTouchPoints', {
+      configurable: true,
+      value: 1
+    });
+
+    await import('../../src/client/main.js');
+
+    const oneFingerMove = new Event('touchmove', { cancelable: true });
+    Object.defineProperty(oneFingerMove, 'touches', {
+      configurable: true,
+      value: [{ identifier: 1 }]
+    });
+
+    expect(document.dispatchEvent(oneFingerMove)).toBe(false);
+    expect(oneFingerMove.defaultPrevented).toBe(true);
+  });
 });

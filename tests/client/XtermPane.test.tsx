@@ -15,6 +15,7 @@ const xtermMocks = vi.hoisted(() => ({
     writeln: ReturnType<typeof vi.fn>;
     refresh: ReturnType<typeof vi.fn>;
     focus: ReturnType<typeof vi.fn>;
+    scrollLines: ReturnType<typeof vi.fn>;
     dispose: ReturnType<typeof vi.fn>;
     dataHandler: ((data: string) => void) | null;
   }>,
@@ -32,6 +33,7 @@ vi.mock('@xterm/xterm', () => ({
     writeln = vi.fn();
     refresh = vi.fn();
     focus = vi.fn();
+    scrollLines = vi.fn();
     dispose = vi.fn();
     dataHandler: ((data: string) => void) | null = null;
 
@@ -339,6 +341,26 @@ describe('XtermPane', () => {
       { type: 'input', terminalId: 'term-alpha', data: 'c' }
     ]);
     await waitFor(() => expect(ctrlButton).toHaveAttribute('aria-pressed', 'false'));
+  });
+
+  it('maps one-finger terminal drags to xterm scrollback without page panning', async () => {
+    renderPane();
+    await openSocketAfterXtermReady();
+
+    const container = document.querySelector('.xterm-container');
+    expect(container).toBeInstanceOf(HTMLElement);
+
+    fireEvent.touchStart(container as HTMLElement, { touches: [{ clientY: 160 }] });
+    const dragUp = new Event('touchmove', { bubbles: true, cancelable: true });
+    Object.defineProperty(dragUp, 'touches', {
+      configurable: true,
+      value: [{ clientY: 120 }]
+    });
+    container?.dispatchEvent(dragUp);
+
+    expect(dragUp.defaultPrevented).toBe(true);
+    expect(xtermMocks.terminals[0]?.scrollLines).toHaveBeenCalledWith(expect.any(Number));
+    expect((xtermMocks.terminals[0]?.scrollLines.mock.calls[0]?.[0] as number) > 0).toBe(true);
   });
 
   it('passes through unhandled Ctrl-armed input and resets the modifier', async () => {

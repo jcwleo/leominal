@@ -10,6 +10,7 @@ import { MobileTerminalKeyBar } from './MobileTerminalKeyBar.js';
 import { ctrlModifiedData, terminalKeySequence, type MobileTerminalStandaloneKey } from './mobileTerminalKeys.js';
 
 const terminalFitSettleDelaysMs = [0, 50, 150, 350] as const;
+const touchScrollLineHeight = terminalFontSize * 1.2;
 
 interface XtermPaneProps {
   terminal: TerminalSummary;
@@ -58,6 +59,7 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
 
     let disposed = false;
     let dataDisposable: { dispose(): void } | null = null;
+    let removeTouchScroll: (() => void) | null = null;
     let resizeObserver: ResizeObserver | null = null;
     lastReportedSizeRef.current = null;
     clearScheduledFit();
@@ -89,6 +91,7 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
       }
 
       xterm.open(container);
+      removeTouchScroll = installTerminalTouchScroll(container, xterm);
 
       const inputComposer = new HangulInputComposer();
       dataDisposable = xterm.onData((data) => {
@@ -116,6 +119,7 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
     return () => {
       disposed = true;
       clearScheduledFit();
+      removeTouchScroll?.();
       resizeObserver?.disconnect();
       dataDisposable?.dispose();
       xterm.dispose();
@@ -376,6 +380,76 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
       ) : null}
     </section>
   );
+}
+
+function installTerminalTouchScroll(container: HTMLElement, xterm: Terminal): () => void {
+  let lastTouchY: number | null = null;
+  let pendingLines = 0;
+  const touchOptions: AddEventListenerOptions = { passive: false };
+
+  function handleTouchStart(event: TouchEvent) {
+    const touchY = readSingleTouchY(event);
+    lastTouchY = touchY;
+    pendingLines = 0;
+  }
+
+  function handleTouchMove(event: TouchEvent) {
+    const touchY = readSingleTouchY(event);
+    if (touchY === null) {
+      lastTouchY = null;
+      pendingLines = 0;
+      return;
+    }
+    if (lastTouchY === null) {
+      lastTouchY = touchY;
+      return;
+    }
+
+    const deltaY = touchY - lastTouchY;
+    lastTouchY = touchY;
+    if (event.cancelable) {
+      event.preventDefault();
+    }
+    if (deltaY === 0) {
+      return;
+    }
+
+    pendingLines -= deltaY / touchScrollLineHeight;
+    const wholeLines = pendingLines < 0 ? Math.ceil(pendingLines) : Math.floor(pendingLines);
+    if (wholeLines === 0) {
+      return;
+    }
+    pendingLines -= wholeLines;
+    xterm.scrollLines(wholeLines);
+  }
+
+  function handleTouchEnd(event: TouchEvent) {
+    if (event.touches.length > 0) {
+      lastTouchY = readSingleTouchY(event);
+      return;
+    }
+    lastTouchY = null;
+    pendingLines = 0;
+  }
+
+  container.addEventListener('touchstart', handleTouchStart, touchOptions);
+  container.addEventListener('touchmove', handleTouchMove, touchOptions);
+  container.addEventListener('touchend', handleTouchEnd);
+  container.addEventListener('touchcancel', handleTouchEnd);
+
+  return () => {
+    container.removeEventListener('touchstart', handleTouchStart, touchOptions);
+    container.removeEventListener('touchmove', handleTouchMove, touchOptions);
+    container.removeEventListener('touchend', handleTouchEnd);
+    container.removeEventListener('touchcancel', handleTouchEnd);
+  };
+}
+
+function readSingleTouchY(event: TouchEvent): number | null {
+  if (event.touches.length !== 1) {
+    return null;
+  }
+  return event.touches[0]?.clientY ?? null;
 }
 
 function parseServerMessage(data: unknown): ServerTerminalMessage | null {
