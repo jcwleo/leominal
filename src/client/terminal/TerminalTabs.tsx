@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { TerminalId, TerminalSummary, TerminalTabLayout } from '../../shared/types.js';
+import { splitDownShortcutLabel, splitRightShortcutLabel } from './keyboardShortcuts.js';
 import { listTabTerminalIds } from './terminalReducer.js';
 
 interface TerminalTabsProps {
@@ -59,7 +60,7 @@ export function TerminalTabs({
           type="button"
           className="pane-action-button"
           aria-label="Split right"
-          title="Split right"
+          title={`Split right - ${splitRightShortcutLabel}`}
           onClick={onSplitVertical}
           disabled={!activePaneAvailable}
         >
@@ -69,7 +70,7 @@ export function TerminalTabs({
           type="button"
           className="pane-action-button"
           aria-label="Split down"
-          title="Split down"
+          title={`Split down - ${splitDownShortcutLabel}`}
           onClick={onSplitHorizontal}
           disabled={!activePaneAvailable}
         >

@@ -197,6 +197,8 @@ describe('TerminalTabs', () => {
 
     expect(onSplitVertical).toHaveBeenCalledOnce();
     expect(onSplitHorizontal).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Split right' })).toHaveAttribute('title', 'Split right - Ctrl+Option+Shift+Right');
+    expect(screen.getByRole('button', { name: 'Split down' })).toHaveAttribute('title', 'Split down - Ctrl+Option+Shift+Down');
     expect(screen.queryByRole('button', { name: 'Close pane' })).toBeNull();
   });
 

@@ -55,6 +55,21 @@ Drop files or folders onto the terminal workspace to upload them into the active
 
 Upload progress and partial failures appear in the bottom-right terminal popup. Successful files remain in place when another file in the same batch fails. Folder uploads depend on browser support for directory drag-and-drop; unsupported folder drops fail visibly instead of flattening the folder.
 
+## Keyboard Shortcuts
+
+Leominal uses Control-based workspace shortcuts so browser-reserved Command shortcuts stay available to the browser.
+
+| Action | Shortcut |
+| --- | --- |
+| Select pane by screen order | `Ctrl+1` through `Ctrl+9` |
+| Select workspace by sidebar order | `Ctrl+Shift+1` through `Ctrl+Shift+9` |
+| Move to pane by direction | `Ctrl+Option+Arrow` |
+| Cycle to previous or next pane | `Ctrl+Option+[` / `Ctrl+Option+]` |
+| Split right | `Ctrl+Option+Shift+Right` |
+| Split down | `Ctrl+Option+Shift+Down` |
+
+Split and workspace buttons show their assigned shortcuts in hover tooltips. If macOS has a global shortcut assigned to the same combination, the system shortcut wins before the browser can deliver it to Leominal.
+
 ## Requirements
 
 - Node.js 22 or newer.

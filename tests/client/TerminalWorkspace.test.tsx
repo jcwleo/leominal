@@ -348,9 +348,22 @@ describe('TerminalWorkspace', () => {
       const shell = await screen.findByRole('main');
       expect(screen.getByText('Beta')).toBeVisible();
 
-      const paneNumber = new KeyboardEvent('keydown', {
+      const browserReservedPaneNumber = new KeyboardEvent('keydown', {
         key: '1',
         metaKey: true,
+        bubbles: true,
+        cancelable: true
+      });
+      shell.dispatchEvent(browserReservedPaneNumber);
+
+      expect(browserReservedPaneNumber.defaultPrevented).toBe(false);
+      expect(bubbled).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Beta')).toBeVisible();
+
+      const paneNumber = new KeyboardEvent('keydown', {
+        key: '1',
+        code: 'Digit1',
+        ctrlKey: true,
         bubbles: true,
         cancelable: true
       });
@@ -358,22 +371,76 @@ describe('TerminalWorkspace', () => {
 
       await waitFor(() => expect(screen.getByText('Alpha')).toBeVisible());
       expect(paneNumber.defaultPrevented).toBe(true);
-      expect(bubbled).not.toHaveBeenCalled();
+      expect(bubbled).toHaveBeenCalledTimes(1);
 
-      fireEvent.keyDown(shell, { key: ']', metaKey: true });
+      fireEvent.keyDown(shell, { key: ']', ctrlKey: true, altKey: true });
       await waitFor(() => expect(screen.getByText('Beta')).toBeVisible());
 
-      fireEvent.keyDown(shell, { key: 'ArrowLeft', metaKey: true, altKey: true });
+      fireEvent.keyDown(shell, { key: 'ArrowLeft', ctrlKey: true, altKey: true });
       await waitFor(() => expect(screen.getByText('Alpha')).toBeVisible());
 
-      fireEvent.keyDown(shell, { key: '2', metaKey: true, altKey: true });
+      fireEvent.keyDown(shell, { key: '2', code: 'Digit2', ctrlKey: true });
       await waitFor(() => expect(screen.getByText('Beta')).toBeVisible());
 
-      fireEvent.keyDown(shell, { key: '9', metaKey: true });
+      fireEvent.keyDown(shell, { key: '9', code: 'Digit9', ctrlKey: true });
       expect(screen.getByText('Beta')).toBeVisible();
     } finally {
       document.removeEventListener('keydown', bubbled);
     }
+  });
+
+  it('splits panes from keyboard shortcuts', async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha')]);
+
+    render(<TerminalWorkspace api={api} />);
+
+    const shell = await screen.findByRole('main');
+
+    fireEvent.keyDown(shell, { key: 'ArrowRight', ctrlKey: true, altKey: true, shiftKey: true });
+
+    await waitFor(() => {
+      expect(api.saveTerminalLayout).toHaveBeenCalledWith({
+        layout: expect.objectContaining({
+          workspaces: expect.arrayContaining([
+            expect.objectContaining({
+              tabs: expect.arrayContaining([
+                expect.objectContaining({
+                  root: expect.objectContaining({ direction: 'vertical' })
+                })
+              ])
+            })
+          ])
+        }),
+        baseRevision: 0
+      });
+    });
+  });
+
+  it('splits panes downward from keyboard shortcuts', async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha')]);
+
+    render(<TerminalWorkspace api={api} />);
+
+    const shell = await screen.findByRole('main');
+
+    fireEvent.keyDown(shell, { key: 'ArrowDown', ctrlKey: true, altKey: true, shiftKey: true });
+
+    await waitFor(() => {
+      expect(api.saveTerminalLayout).toHaveBeenCalledWith({
+        layout: expect.objectContaining({
+          workspaces: expect.arrayContaining([
+            expect.objectContaining({
+              tabs: expect.arrayContaining([
+                expect.objectContaining({
+                  root: expect.objectContaining({ direction: 'horizontal' })
+                })
+              ])
+            })
+          ])
+        }),
+        baseRevision: 0
+      });
+    });
   });
 
   it('does not handle shortcut-like keys from editable or composing targets', async () => {
@@ -433,7 +500,7 @@ describe('TerminalWorkspace', () => {
     }
   });
 
-  it('selects workspaces from ctrl number shortcuts', async () => {
+  it('selects workspaces from ctrl shift number shortcuts', async () => {
     const api = createApi();
 
     render(<TerminalWorkspace api={api} />);
@@ -446,13 +513,31 @@ describe('TerminalWorkspace', () => {
     fireEvent.click(within(workspaces).getByRole('button', { name: /^Workspace 2/ }));
     expect(screen.getByText('No terminal is open.')).toBeVisible();
 
-    fireEvent.keyDown(shell, { key: '1', ctrlKey: true });
+    fireEvent.keyDown(shell, { key: '!', code: 'Digit1', ctrlKey: true, shiftKey: true });
 
     await waitFor(() => expect(within(tabs).getByText('Alpha')).toBeVisible());
     expect(within(workspaces).getByRole('button', { name: /^Leominal/ })).toHaveAttribute('aria-current', 'page');
 
-    fireEvent.keyDown(shell, { key: '9', ctrlKey: true });
+    fireEvent.keyDown(shell, { key: '(', code: 'Digit9', ctrlKey: true, shiftKey: true });
     expect(within(workspaces).getByRole('button', { name: /^Leominal/ })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('shows workspace shortcut hints on workspace buttons', async () => {
+    const api = createApi();
+
+    render(<TerminalWorkspace api={api} />);
+
+    const workspaces = await screen.findByRole('navigation', { name: 'Workspaces' });
+    fireEvent.click(within(workspaces).getByRole('button', { name: 'New workspace' }));
+
+    expect(within(workspaces).getByRole('button', { name: /^Leominal/ })).toHaveAttribute(
+      'title',
+      'Leominal - Ctrl+Shift+1 - double-click to rename'
+    );
+    expect(within(workspaces).getByRole('button', { name: /^Workspace 2/ })).toHaveAttribute(
+      'title',
+      'Workspace 2 - Ctrl+Shift+2 - double-click to rename'
+    );
   });
 
   it('migrates a saved local workspace layout when the server has no layout yet', async () => {

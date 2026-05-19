@@ -3,6 +3,7 @@ import { isTerminalTabLayout, normalizeTerminalLayoutState } from '../../shared/
 import type { TerminalId, TerminalLayoutState, TerminalSummary, TerminalTabLayout, TerminalWorkspaceLayout } from '../../shared/types.js';
 import { ApiError, type ApiClient, createApiClient } from '../api/client.js';
 import { uploadFiles } from '../api/uploadClient.js';
+import { workspaceIndexShortcutLabel } from './keyboardShortcuts.js';
 import { LeominalMark } from './LeominalMark.js';
 import { SplitPane } from './SplitPane.js';
 import { TerminalTabs } from './TerminalTabs.js';
@@ -289,6 +290,11 @@ export function TerminalWorkspace({
       return;
     }
 
+    if (shortcut.type === 'split') {
+      void split(shortcut.direction);
+      return;
+    }
+
     const targetTerminalId = paneTargetForShortcut(tab.root, tab.activeTerminalId, shortcut);
     if (targetTerminalId) {
       dispatchLayoutChange({ type: 'pane.selected', terminalId: targetTerminalId });
@@ -512,13 +518,17 @@ export function TerminalWorkspace({
             </div>
           ) : null}
           <div className="workspace-list">
-            {state.workspaces.map((workspace) => {
+            {state.workspaces.map((workspace, workspaceIndex) => {
               const workspaceActiveTab = workspace.tabs.find((tab) => tab.id === workspace.activeTabId) ?? workspace.tabs[0];
               const workspaceActiveTerminal = workspaceActiveTab ? state.terminals[workspaceActiveTab.activeTerminalId] : undefined;
               const workspaceSummary = workspaceActiveTerminal?.cwd ?? `${workspace.tabs.length} tab${workspace.tabs.length === 1 ? '' : 's'}`;
               const active = workspace.id === state.activeWorkspaceId;
               const editing = editingWorkspace?.workspaceId === workspace.id && showSidebarDetails;
               const workspaceInitial = (workspace.title.trim()[0] ?? '?').toUpperCase();
+              const workspaceShortcut = workspaceIndexShortcutLabel(workspaceIndex + 1);
+              const workspaceTitle = showSidebarDetails
+                ? `${workspace.title} - ${workspaceShortcut} - double-click to rename`
+                : `${workspace.title} - ${workspaceShortcut}`;
               return (
                 <div
                   className="workspace-entry"
@@ -563,7 +573,7 @@ export function TerminalWorkspace({
                       className="workspace-select-button"
                       aria-current={active ? 'page' : undefined}
                       aria-label={!showSidebarDetails ? `Select workspace ${workspace.title}` : undefined}
-                      title={sidebarCollapsed ? workspace.title : `${workspace.title} - double-click to rename`}
+                      title={workspaceTitle}
                       onClick={() => {
                         dispatchLayoutChange({ type: 'workspace.selected', workspaceId: workspace.id });
                         setSidebarOpen(false);
@@ -666,42 +676,43 @@ type WorkspaceShortcut =
   | { type: 'pane.previous' }
   | { type: 'pane.next' }
   | { type: 'pane.index'; index: number }
-  | { type: 'workspace.index'; index: number };
+  | { type: 'workspace.index'; index: number }
+  | { type: 'split'; direction: 'horizontal' | 'vertical' };
 
 function parseWorkspaceShortcut(event: React.KeyboardEvent<HTMLElement>): WorkspaceShortcut | null {
-  const digit = digitKey(event.key);
-  if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && digit !== null) {
-    return { type: 'workspace.index', index: digit };
-  }
-
-  if (!event.metaKey || event.ctrlKey || event.shiftKey) {
+  const digit = digitKey(event);
+  if (!event.ctrlKey || event.metaKey) {
     return null;
   }
 
   if (event.altKey) {
-    const direction = arrowDirection(event.key);
-    if (digit !== null) {
-      return { type: 'pane.index', index: digit };
+    if (event.shiftKey) {
+      const splitDirection = splitDirectionForShortcut(event.key);
+      return splitDirection ? { type: 'split', direction: splitDirection } : null;
     }
-    return direction ? { type: 'pane.direction', direction } : null;
+    const direction = arrowDirection(event.key);
+    if (direction) {
+      return { type: 'pane.direction', direction };
+    }
+    if (bracketKey(event) === 'previous') {
+      return { type: 'pane.previous' };
+    }
+    if (bracketKey(event) === 'next') {
+      return { type: 'pane.next' };
+    }
+    return null;
   }
 
-  if (event.key === '[') {
-    return { type: 'pane.previous' };
+  if (event.shiftKey) {
+    return digit !== null ? { type: 'workspace.index', index: digit } : null;
   }
-  if (event.key === ']') {
-    return { type: 'pane.next' };
-  }
-  if (digit !== null) {
-    return { type: 'pane.index', index: digit };
-  }
-  return null;
+  return digit !== null ? { type: 'pane.index', index: digit } : null;
 }
 
 function paneTargetForShortcut(
   root: TerminalTabLayout['root'],
   activeTerminalId: TerminalId,
-  shortcut: Exclude<WorkspaceShortcut, { type: 'workspace.index' }>
+  shortcut: Exclude<WorkspaceShortcut, { type: 'workspace.index' } | { type: 'split' }>
 ): TerminalId | null {
   switch (shortcut.type) {
     case 'pane.direction':
@@ -712,6 +723,17 @@ function paneTargetForShortcut(
       return getNextPaneTarget(root, activeTerminalId);
     case 'pane.index':
       return getPaneTargetByIndex(root, shortcut.index);
+    default:
+      return null;
+  }
+}
+
+function splitDirectionForShortcut(key: string): 'horizontal' | 'vertical' | null {
+  switch (key) {
+    case 'ArrowRight':
+      return 'vertical';
+    case 'ArrowDown':
+      return 'horizontal';
     default:
       return null;
   }
@@ -732,8 +754,22 @@ function arrowDirection(key: string): PaneNavigationDirection | null {
   }
 }
 
-function digitKey(key: string): number | null {
-  return /^[1-9]$/.test(key) ? Number(key) : null;
+function digitKey(event: React.KeyboardEvent<HTMLElement>): number | null {
+  const codeMatch = /^Digit([1-9])$/.exec(event.code);
+  if (codeMatch?.[1]) {
+    return Number(codeMatch[1]);
+  }
+  return /^[1-9]$/.test(event.key) ? Number(event.key) : null;
+}
+
+function bracketKey(event: React.KeyboardEvent<HTMLElement>): 'previous' | 'next' | null {
+  if (event.code === 'BracketLeft' || event.key === '[') {
+    return 'previous';
+  }
+  if (event.code === 'BracketRight' || event.key === ']') {
+    return 'next';
+  }
+  return null;
 }
 
 function isEditableShortcutTarget(target: EventTarget): boolean {
