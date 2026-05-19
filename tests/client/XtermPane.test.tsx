@@ -17,6 +17,9 @@ const xtermMocks = vi.hoisted(() => ({
     focus: ReturnType<typeof vi.fn>;
     scrollLines: ReturnType<typeof vi.fn>;
     dispose: ReturnType<typeof vi.fn>;
+    element: HTMLElement | undefined;
+    buffer: { active: { type: 'normal' | 'alternate' } };
+    modes: { mouseTrackingMode: 'none' | 'x10' | 'vt200' | 'drag' | 'any' };
     dataHandler: ((data: string) => void) | null;
   }>,
   nextSize: { cols: 120, rows: 34 }
@@ -27,7 +30,6 @@ vi.mock('@xterm/xterm', () => ({
     cols = xtermMocks.nextSize.cols;
     rows = xtermMocks.nextSize.rows;
     options: Record<string, unknown>;
-    open = vi.fn();
     clear = vi.fn();
     write = vi.fn();
     writeln = vi.fn();
@@ -35,12 +37,21 @@ vi.mock('@xterm/xterm', () => ({
     focus = vi.fn();
     scrollLines = vi.fn();
     dispose = vi.fn();
+    element: HTMLElement | undefined;
+    buffer = { active: { type: 'normal' as const } };
+    modes = { mouseTrackingMode: 'none' as const };
     dataHandler: ((data: string) => void) | null = null;
 
     constructor(options: Record<string, unknown>) {
       this.options = options;
       xtermMocks.terminals.push(this);
     }
+
+    open = vi.fn((container: HTMLElement) => {
+      this.element = document.createElement('div');
+      this.element.className = 'xterm';
+      container.appendChild(this.element);
+    });
 
     loadAddon(addon: { activate?: (terminal: MockTerminal) => void }) {
       addon.activate?.(this);
@@ -361,6 +372,35 @@ describe('XtermPane', () => {
     expect(dragUp.defaultPrevented).toBe(true);
     expect(xtermMocks.terminals[0]?.scrollLines).toHaveBeenCalledWith(expect.any(Number));
     expect((xtermMocks.terminals[0]?.scrollLines.mock.calls[0]?.[0] as number) > 0).toBe(true);
+  });
+
+  it('forwards one-finger drags to xterm wheel handling when tmux owns scrolling', async () => {
+    renderPane();
+    await openSocketAfterXtermReady();
+    const mockTerminal = xtermMocks.terminals[0];
+    expect(mockTerminal?.element).toBeInstanceOf(HTMLElement);
+    mockTerminal!.buffer.active.type = 'alternate';
+    const wheelHandler = vi.fn((event: WheelEvent) => event.preventDefault());
+    mockTerminal!.element!.addEventListener('wheel', wheelHandler);
+
+    const container = document.querySelector('.xterm-container');
+    expect(container).toBeInstanceOf(HTMLElement);
+    fireEvent.touchStart(container as HTMLElement, { touches: [{ clientX: 40, clientY: 160 }] });
+    const dragUp = new Event('touchmove', { bubbles: true, cancelable: true });
+    Object.defineProperty(dragUp, 'touches', {
+      configurable: true,
+      value: [{ clientX: 40, clientY: 120 }]
+    });
+    container?.dispatchEvent(dragUp);
+
+    expect(dragUp.defaultPrevented).toBe(true);
+    expect(xtermMocks.terminals[0]?.scrollLines).not.toHaveBeenCalled();
+    expect(wheelHandler).toHaveBeenCalledOnce();
+    expect(wheelHandler.mock.calls[0]?.[0]).toMatchObject({
+      deltaY: 40,
+      clientX: 40,
+      clientY: 120
+    });
   });
 
   it('passes through unhandled Ctrl-armed input and resets the modifier', async () => {

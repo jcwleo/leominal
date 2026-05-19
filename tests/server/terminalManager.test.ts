@@ -119,6 +119,48 @@ describe('TerminalManager', () => {
     }
   });
 
+  it('spawns PTYs with browser-terminal and UTF-8 defaults for tmux glyph rendering', async () => {
+    const previousEnv = captureEnv(['COLORTERM', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM']);
+    process.env.TERM = 'tmux-256color';
+    delete process.env.COLORTERM;
+    delete process.env.LANG;
+    delete process.env.LC_ALL;
+    delete process.env.LC_CTYPE;
+    try {
+      const adapter = new FakePtyAdapter();
+      const manager = new TerminalManager(testConfig(), adapter);
+
+      await manager.createTerminal();
+
+      expect(adapter.spawns[0]!.env).toMatchObject({
+        TERM: 'xterm-256color',
+        COLORTERM: 'truecolor',
+        LANG: 'en_US.UTF-8',
+        LC_CTYPE: 'en_US.UTF-8'
+      });
+    } finally {
+      restoreEnv(previousEnv);
+    }
+  });
+
+  it('preserves an existing UTF-8 locale for spawned PTYs', async () => {
+    const previousEnv = captureEnv(['LANG', 'LC_ALL', 'LC_CTYPE']);
+    process.env.LANG = 'ko_KR.UTF-8';
+    delete process.env.LC_ALL;
+    delete process.env.LC_CTYPE;
+    try {
+      const adapter = new FakePtyAdapter();
+      const manager = new TerminalManager(testConfig(), adapter);
+
+      await manager.createTerminal();
+
+      expect(adapter.spawns[0]!.env.LANG).toBe('ko_KR.UTF-8');
+      expect(adapter.spawns[0]!.env.LC_CTYPE).toBe('ko_KR.UTF-8');
+    } finally {
+      restoreEnv(previousEnv);
+    }
+  });
+
   it('replays buffered output on attach and keeps PTYs alive after detach', async () => {
     const adapter = new FakePtyAdapter();
     const manager = new TerminalManager(testConfig(), adapter);
@@ -282,5 +324,15 @@ function setOrDeleteEnv(key: string, value: string | undefined): void {
     delete process.env[key];
   } else {
     process.env[key] = value;
+  }
+}
+
+function captureEnv(keys: string[]): Map<string, string | undefined> {
+  return new Map(keys.map((key) => [key, process.env[key]]));
+}
+
+function restoreEnv(values: Map<string, string | undefined>): void {
+  for (const [key, value] of values) {
+    setOrDeleteEnv(key, value);
   }
 }

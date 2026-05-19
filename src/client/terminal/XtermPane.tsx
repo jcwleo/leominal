@@ -383,34 +383,39 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
 }
 
 function installTerminalTouchScroll(container: HTMLElement, xterm: Terminal): () => void {
-  let lastTouchY: number | null = null;
+  let lastTouch: TouchPoint | null = null;
   let pendingLines = 0;
   const touchOptions: AddEventListenerOptions = { passive: false };
 
   function handleTouchStart(event: TouchEvent) {
-    const touchY = readSingleTouchY(event);
-    lastTouchY = touchY;
+    const touch = readSingleTouchPoint(event);
+    lastTouch = touch;
     pendingLines = 0;
   }
 
   function handleTouchMove(event: TouchEvent) {
-    const touchY = readSingleTouchY(event);
-    if (touchY === null) {
-      lastTouchY = null;
+    const touch = readSingleTouchPoint(event);
+    if (touch === null) {
+      lastTouch = null;
       pendingLines = 0;
       return;
     }
-    if (lastTouchY === null) {
-      lastTouchY = touchY;
+    if (lastTouch === null) {
+      lastTouch = touch;
       return;
     }
 
-    const deltaY = touchY - lastTouchY;
-    lastTouchY = touchY;
+    const deltaY = touch.clientY - lastTouch.clientY;
+    lastTouch = touch;
     if (event.cancelable) {
       event.preventDefault();
     }
     if (deltaY === 0) {
+      return;
+    }
+
+    if (shouldForwardTouchScrollToTerminal(xterm) && dispatchSyntheticTerminalWheel(xterm, touch, -deltaY)) {
+      pendingLines = 0;
       return;
     }
 
@@ -425,10 +430,10 @@ function installTerminalTouchScroll(container: HTMLElement, xterm: Terminal): ()
 
   function handleTouchEnd(event: TouchEvent) {
     if (event.touches.length > 0) {
-      lastTouchY = readSingleTouchY(event);
+      lastTouch = readSingleTouchPoint(event);
       return;
     }
-    lastTouchY = null;
+    lastTouch = null;
     pendingLines = 0;
   }
 
@@ -445,11 +450,58 @@ function installTerminalTouchScroll(container: HTMLElement, xterm: Terminal): ()
   };
 }
 
-function readSingleTouchY(event: TouchEvent): number | null {
+interface TouchPoint {
+  clientX: number;
+  clientY: number;
+}
+
+function readSingleTouchPoint(event: TouchEvent): TouchPoint | null {
   if (event.touches.length !== 1) {
     return null;
   }
-  return event.touches[0]?.clientY ?? null;
+  const touch = event.touches[0];
+  if (!touch) {
+    return null;
+  }
+  return { clientX: touch.clientX, clientY: touch.clientY };
+}
+
+function shouldForwardTouchScrollToTerminal(xterm: Terminal): boolean {
+  return xterm.buffer.active.type === 'alternate' || xterm.modes.mouseTrackingMode !== 'none';
+}
+
+function dispatchSyntheticTerminalWheel(xterm: Terminal, touch: TouchPoint, deltaY: number): boolean {
+  const target = xterm.element;
+  if (!target) {
+    return false;
+  }
+  target.dispatchEvent(createTerminalWheelEvent(touch, deltaY));
+  return true;
+}
+
+function createTerminalWheelEvent(touch: TouchPoint, deltaY: number): WheelEvent {
+  const pixelDeltaMode = typeof WheelEvent === 'function' ? WheelEvent.DOM_DELTA_PIXEL : 0;
+  const eventOptions: WheelEventInit = {
+    bubbles: true,
+    cancelable: true,
+    clientX: touch.clientX,
+    clientY: touch.clientY,
+    deltaX: 0,
+    deltaY,
+    deltaMode: pixelDeltaMode
+  };
+  if (typeof WheelEvent === 'function') {
+    return new WheelEvent('wheel', eventOptions);
+  }
+  const event = new Event('wheel', eventOptions) as WheelEvent;
+  Object.defineProperties(event, {
+    clientX: { value: touch.clientX },
+    clientY: { value: touch.clientY },
+    deltaX: { value: 0 },
+    deltaY: { value: deltaY },
+    deltaMode: { value: 0 }
+  });
+  return event;
 }
 
 function parseServerMessage(data: unknown): ServerTerminalMessage | null {

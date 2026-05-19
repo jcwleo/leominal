@@ -251,14 +251,39 @@ function cloneSummary(summary: TerminalSummary): TerminalSummary {
 
 function terminalEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  const allowedKeys = ['HOME', 'LANG', 'LC_ALL', 'LOGNAME', 'PATH', 'SHELL', 'TMPDIR', 'USER'];
+  const allowedKeys = ['HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'LOGNAME', 'PATH', 'SHELL', 'TMPDIR', 'USER'];
   for (const key of allowedKeys) {
     const value = process.env[key];
     if (value !== undefined) {
       env[key] = value;
     }
   }
-  env.TERM = process.env.TERM ?? 'xterm-256color';
+  env.TERM = 'xterm-256color';
   env.COLORTERM = process.env.COLORTERM ?? 'truecolor';
+  ensureUtf8TerminalLocale(env);
   return env;
+}
+
+const fallbackTerminalLocale = 'en_US.UTF-8';
+
+function ensureUtf8TerminalLocale(env: NodeJS.ProcessEnv): void {
+  const characterLocale = env.LC_ALL ?? env.LC_CTYPE ?? env.LANG;
+  if (isUtf8Locale(characterLocale)) {
+    if (!env.LANG) {
+      env.LANG = characterLocale;
+    }
+    if (!env.LC_ALL && !env.LC_CTYPE) {
+      env.LC_CTYPE = characterLocale;
+    }
+    return;
+  }
+
+  env.LANG = fallbackTerminalLocale;
+  if (!env.LC_ALL) {
+    env.LC_CTYPE = fallbackTerminalLocale;
+  }
+}
+
+function isUtf8Locale(value: string | undefined): value is string {
+  return value !== undefined && /utf-?8/i.test(value);
 }
