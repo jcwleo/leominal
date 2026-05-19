@@ -1,6 +1,6 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ServerTerminalMessage } from '../../shared/protocol.js';
 import type { TerminalSummary } from '../../shared/types.js';
 import { createTerminalWebSocketUrl } from '../api/client.js';
@@ -8,6 +8,8 @@ import { terminalFontFamily, terminalFontSize, waitForTerminalFonts } from './fo
 import { HangulInputComposer } from './hangulInput.js';
 import { MobileTerminalKeyBar } from './MobileTerminalKeyBar.js';
 import { ctrlModifiedData, terminalKeySequence, type MobileTerminalStandaloneKey } from './mobileTerminalKeys.js';
+import { installTerminalClipboard } from './terminalClipboard.js';
+import { installInactiveTerminalReportGuards } from './terminalReportGuards.js';
 
 const terminalFitSettleDelaysMs = [0, 50, 150, 350] as const;
 const touchScrollLineHeight = terminalFontSize * 1.2;
@@ -32,8 +34,19 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
   const lastReportedSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const pendingFitTimersRef = useRef<Map<number, number>>(new Map());
   const ctrlModifierArmedRef = useRef(false);
+  const activeRef = useRef(active);
   const [, setConnectionStatus] = useState<'connecting' | 'connected' | 'reconnecting' | 'closed'>('connecting');
   const [ctrlModifierArmed, setCtrlModifierArmed] = useState(false);
+
+  useLayoutEffect(() => {
+    activeRef.current = active;
+  }, [active]);
+
+  useEffect(() => {
+    if (active && terminal.status === 'running') {
+      focusTerminal();
+    }
+  }, [active, terminal.status]);
 
   useEffect(() => {
     callbacksRef.current = { onExit, onSnapshot };
@@ -58,7 +71,9 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
     }
 
     let disposed = false;
+    let clipboardDisposable: { dispose(): void } | null = null;
     let dataDisposable: { dispose(): void } | null = null;
+    let reportGuardsDisposable: { dispose(): void } | null = null;
     let removeTouchScroll: (() => void) | null = null;
     let resizeObserver: ResizeObserver | null = null;
     lastReportedSizeRef.current = null;
@@ -72,6 +87,7 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
       fontSize: terminalFontSize,
       fontWeight: 400,
       fontWeightBold: 700,
+      macOptionClickForcesSelection: true,
       scrollback: 10_000,
       theme: {
         background: '#0a0d10',
@@ -82,6 +98,7 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
     });
     const fit = new FitAddon();
     xterm.loadAddon(fit);
+    reportGuardsDisposable = installInactiveTerminalReportGuards(xterm, () => activeRef.current);
     xtermRef.current = xterm;
     fitRef.current = fit;
 
@@ -91,6 +108,10 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
       }
 
       xterm.open(container);
+      clipboardDisposable = installTerminalClipboard(xterm);
+      if (activeRef.current && terminal.status === 'running') {
+        focusTerminal();
+      }
       removeTouchScroll = installTerminalTouchScroll(container, xterm);
 
       const inputComposer = new HangulInputComposer();
@@ -121,7 +142,9 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
       clearScheduledFit();
       removeTouchScroll?.();
       resizeObserver?.disconnect();
+      clipboardDisposable?.dispose();
       dataDisposable?.dispose();
+      reportGuardsDisposable?.dispose();
       xterm.dispose();
       xtermRef.current = null;
       fitRef.current = null;
@@ -343,7 +366,15 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
   }
 
   return (
-    <section className="terminal-pane" data-active={active} onMouseDown={onSelect}>
+    <section
+      className="terminal-pane"
+      data-active={active}
+      onMouseDown={() => {
+        if (!active) {
+          onSelect();
+        }
+      }}
+    >
       <header className="terminal-pane-header">
         <span className="terminal-pane-dot" aria-hidden="true" />
         <span className="terminal-pane-cwd" title={terminal.cwd}>

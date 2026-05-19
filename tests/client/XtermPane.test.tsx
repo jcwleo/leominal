@@ -17,10 +17,21 @@ const xtermMocks = vi.hoisted(() => ({
     focus: ReturnType<typeof vi.fn>;
     scrollLines: ReturnType<typeof vi.fn>;
     dispose: ReturnType<typeof vi.fn>;
+    options: Record<string, unknown>;
     element: HTMLElement | undefined;
     buffer: { active: { type: 'normal' | 'alternate' } };
     modes: { mouseTrackingMode: 'none' | 'x10' | 'vt200' | 'drag' | 'any' };
+    parser: {
+      registerCsiHandler: ReturnType<typeof vi.fn>;
+      registerDcsHandler: ReturnType<typeof vi.fn>;
+      registerOscHandler: ReturnType<typeof vi.fn>;
+    };
     dataHandler: ((data: string) => void) | null;
+    keyEventHandler: ((event: KeyboardEvent) => boolean) | null;
+    selectionText: string;
+    hasSelection: ReturnType<typeof vi.fn>;
+    getSelection: ReturnType<typeof vi.fn>;
+    attachCustomKeyEventHandler: ReturnType<typeof vi.fn>;
   }>,
   nextSize: { cols: 120, rows: 34 }
 }));
@@ -40,7 +51,19 @@ vi.mock('@xterm/xterm', () => ({
     element: HTMLElement | undefined;
     buffer = { active: { type: 'normal' as const } };
     modes = { mouseTrackingMode: 'none' as const };
+    parser = {
+      registerCsiHandler: vi.fn(() => ({ dispose: vi.fn() })),
+      registerDcsHandler: vi.fn(() => ({ dispose: vi.fn() })),
+      registerOscHandler: vi.fn(() => ({ dispose: vi.fn() }))
+    };
     dataHandler: ((data: string) => void) | null = null;
+    keyEventHandler: ((event: KeyboardEvent) => boolean) | null = null;
+    selectionText = '';
+    hasSelection = vi.fn(() => this.selectionText.length > 0);
+    getSelection = vi.fn(() => this.selectionText);
+    attachCustomKeyEventHandler = vi.fn((handler: (event: KeyboardEvent) => boolean) => {
+      this.keyEventHandler = handler;
+    });
 
     constructor(options: Record<string, unknown>) {
       this.options = options;
@@ -207,6 +230,10 @@ describe('XtermPane', () => {
     xtermMocks.terminals.length = 0;
     xtermMocks.nextSize = { cols: 120, rows: 34 };
     setVisibility('visible');
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined
+    });
     vi.stubGlobal('WebSocket', MockWebSocket);
     vi.stubGlobal('ResizeObserver', MockResizeObserver);
   });
@@ -313,6 +340,149 @@ describe('XtermPane', () => {
     expect(screen.getByRole('button', { name: 'Send Arrow Down' })).toBeVisible();
     expect(screen.queryByRole('button', { name: /command/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /ctrl\+c/i })).toBeNull();
+  });
+
+  it('enables modifier-forced xterm selection so terminal mouse mode can still be copied', async () => {
+    renderPane();
+    await waitFor(() => expect(xtermMocks.terminals[0]?.open).toHaveBeenCalled());
+
+    expect(xtermMocks.terminals[0]?.options).toMatchObject({
+      macOptionClickForcesSelection: true
+    });
+  });
+
+  it('copies selected terminal text on Command+C without sending input to the pty', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText }
+    });
+    renderPane();
+    const socket = await openSocketAfterXtermReady();
+    const mockTerminal = xtermMocks.terminals[0];
+    expect(mockTerminal?.keyEventHandler).toBeTypeOf('function');
+    mockTerminal!.selectionText = 'selected output';
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'c',
+      metaKey: true,
+      bubbles: true,
+      cancelable: true
+    });
+    const shouldProcessInXterm = mockTerminal!.keyEventHandler!(event);
+
+    expect(shouldProcessInXterm).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('selected output'));
+    expect(inputMessages([socket])).toEqual([]);
+  });
+
+  it('falls back to a temporary textarea copy when the async Clipboard API is unavailable', async () => {
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommand
+    });
+    renderPane();
+    await openSocketAfterXtermReady();
+    const mockTerminal = xtermMocks.terminals[0];
+    mockTerminal!.selectionText = 'selected output';
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'c',
+      metaKey: true,
+      bubbles: true,
+      cancelable: true
+    });
+    mockTerminal!.keyEventHandler!(event);
+
+    await waitFor(() => expect(execCommand).toHaveBeenCalledWith('copy'));
+    expect(document.querySelector('textarea[readonly="true"]')).toBeNull();
+  });
+
+  it('writes selected terminal text into native copy events', async () => {
+    renderPane();
+    await openSocketAfterXtermReady();
+    const mockTerminal = xtermMocks.terminals[0];
+    const setData = vi.fn();
+    mockTerminal!.selectionText = 'selected output';
+
+    const event = new Event('copy', { bubbles: true, cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(event, 'clipboardData', {
+      configurable: true,
+      value: { setData }
+    });
+    mockTerminal!.element!.dispatchEvent(event);
+
+    expect(setData).toHaveBeenCalledWith('text/plain', 'selected output');
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it('keeps plain Ctrl+C available for terminal interrupt input', async () => {
+    renderPane();
+    await openSocketAfterXtermReady();
+    const mockTerminal = xtermMocks.terminals[0];
+    mockTerminal!.selectionText = 'selected output';
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'c',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true
+    });
+
+    expect(mockTerminal!.keyEventHandler?.(event)).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it('does not reselect the already active pane when terminal selection starts', async () => {
+    const onSelect = vi.fn();
+    renderPane({ onSelect });
+    await waitFor(() => expect(xtermMocks.terminals[0]?.open).toHaveBeenCalled());
+
+    fireEvent.mouseDown(document.querySelector('.xterm-container') as HTMLElement);
+
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('selects the pane on mouse down when it is inactive', async () => {
+    const onSelect = vi.fn();
+    renderPane({ active: false, onSelect });
+    await waitFor(() => expect(xtermMocks.terminals[0]?.open).toHaveBeenCalled());
+
+    fireEvent.mouseDown(document.querySelector('.xterm-container') as HTMLElement);
+
+    expect(onSelect).toHaveBeenCalledOnce();
+  });
+
+  it('focuses the xterm when the pane becomes active', async () => {
+    const { rerender } = render(
+      <XtermPane
+        terminal={terminal()}
+        active={false}
+        onSelect={() => undefined}
+        onExit={() => undefined}
+        onSnapshot={() => undefined}
+        canClose={false}
+        onClose={() => undefined}
+      />
+    );
+    await waitFor(() => expect(xtermMocks.terminals[0]?.open).toHaveBeenCalled());
+    expect(xtermMocks.terminals[0]?.focus).not.toHaveBeenCalled();
+
+    rerender(
+      <XtermPane
+        terminal={terminal()}
+        active
+        onSelect={() => undefined}
+        onExit={() => undefined}
+        onSnapshot={() => undefined}
+        canClose={false}
+        onClose={() => undefined}
+      />
+    );
+
+    expect(xtermMocks.terminals[0]?.focus).toHaveBeenCalledOnce();
   });
 
   it('sends standalone mobile key bar inputs to the active terminal socket', async () => {
