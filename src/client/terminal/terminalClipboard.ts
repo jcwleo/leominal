@@ -42,11 +42,27 @@ export function installTerminalClipboard(xterm: Terminal): Disposable {
     void writeClipboardText(selection);
   };
 
+  const handlePaste = (event: ClipboardEvent) => {
+    const text = event.clipboardData?.getData('text/plain');
+    if (text === undefined) {
+      return;
+    }
+    const safeText = stripTerminalExecutingTrailingLineBreaks(text);
+    if (safeText === text) {
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    xterm.paste(safeText);
+  };
+
   element.addEventListener('copy', handleCopy, true);
+  element.addEventListener('paste', handlePaste, true);
 
   return {
     dispose() {
       element.removeEventListener('copy', handleCopy, true);
+      element.removeEventListener('paste', handlePaste, true);
       xterm.attachCustomKeyEventHandler(() => true);
     }
   };
@@ -70,6 +86,10 @@ function readSelection(xterm: Terminal): string {
     return '';
   }
   return xterm.getSelection();
+}
+
+function stripTerminalExecutingTrailingLineBreaks(text: string): string {
+  return text.replace(/(?:\r\n|\r|\n)+$/, '');
 }
 
 async function writeClipboardText(text: string): Promise<void> {

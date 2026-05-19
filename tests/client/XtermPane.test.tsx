@@ -32,6 +32,7 @@ const xtermMocks = vi.hoisted(() => ({
     hasSelection: ReturnType<typeof vi.fn>;
     getSelection: ReturnType<typeof vi.fn>;
     attachCustomKeyEventHandler: ReturnType<typeof vi.fn>;
+    paste: ReturnType<typeof vi.fn>;
   }>,
   nextSize: { cols: 120, rows: 34 }
 }));
@@ -63,6 +64,9 @@ vi.mock('@xterm/xterm', () => ({
     getSelection = vi.fn(() => this.selectionText);
     attachCustomKeyEventHandler = vi.fn((handler: (event: KeyboardEvent) => boolean) => {
       this.keyEventHandler = handler;
+    });
+    paste = vi.fn((data: string) => {
+      this.dataHandler?.(data.replace(/\r?\n/g, '\r'));
     });
 
     constructor(options: Record<string, unknown>) {
@@ -433,6 +437,27 @@ describe('XtermPane', () => {
 
     expect(mockTerminal!.keyEventHandler?.(event)).toBe(true);
     expect(event.defaultPrevented).toBe(false);
+  });
+
+  it('strips a terminal-executing trailing line break from pasted text before Ctrl+C', async () => {
+    renderPane();
+    const socket = await openSocketAfterXtermReady();
+    const mockTerminal = xtermMocks.terminals[0];
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      configurable: true,
+      value: { getData: vi.fn(() => 'echo should-not-run\n') }
+    });
+
+    mockTerminal!.element!.dispatchEvent(pasteEvent);
+    mockTerminal!.dataHandler?.('\x03');
+
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    expect(mockTerminal!.paste).toHaveBeenCalledWith('echo should-not-run');
+    expect(inputMessages([socket])).toEqual([
+      { type: 'input', terminalId: 'term-alpha', data: 'echo should-not-run' },
+      { type: 'input', terminalId: 'term-alpha', data: '\x03' }
+    ]);
   });
 
   it('does not reselect the already active pane when terminal selection starts', async () => {
