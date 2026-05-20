@@ -92,6 +92,9 @@ function collectPaneEntries(node: LayoutNode, bounds: PaneBounds): RawPaneEntry[
   if (node.type === 'pane') {
     return [{ terminalId: node.terminalId, bounds }];
   }
+  if (node.type === 'editor') {
+    return [];
+  }
 
   const ratio = clampRatio(node.ratio);
   if (node.direction === 'vertical') {

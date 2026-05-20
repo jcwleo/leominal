@@ -17,6 +17,9 @@ export interface AppConfig {
   uploadMaxFiles: number;
   uploadMaxFileBytes: number;
   uploadMaxBatchBytes: number;
+  fileListMaxEntries: number;
+  fileTextMaxBytes: number;
+  filePreviewMaxBytes: number;
 }
 
 export interface ConfigEnv {
@@ -97,6 +100,9 @@ export function loadConfig(env: ConfigEnv = process.env): AppConfig {
   const uploadMaxFiles = readInt(env.LEOMINAL_UPLOAD_MAX_FILES, 1024, 'LEOMINAL_UPLOAD_MAX_FILES');
   const uploadMaxFileBytes = readInt(env.LEOMINAL_UPLOAD_MAX_FILE_BYTES, 536_870_912, 'LEOMINAL_UPLOAD_MAX_FILE_BYTES');
   const uploadMaxBatchBytes = readInt(env.LEOMINAL_UPLOAD_MAX_BATCH_BYTES, 2_147_483_648, 'LEOMINAL_UPLOAD_MAX_BATCH_BYTES');
+  const fileListMaxEntries = readInt(env.LEOMINAL_FILE_LIST_MAX_ENTRIES, 2000, 'LEOMINAL_FILE_LIST_MAX_ENTRIES');
+  const fileTextMaxBytes = readInt(env.LEOMINAL_FILE_TEXT_MAX_BYTES, 1_048_576, 'LEOMINAL_FILE_TEXT_MAX_BYTES');
+  const filePreviewMaxBytes = readInt(env.LEOMINAL_FILE_PREVIEW_MAX_BYTES, 52_428_800, 'LEOMINAL_FILE_PREVIEW_MAX_BYTES');
   const isProduction = env.NODE_ENV === 'production';
   return {
     host,
@@ -112,7 +118,10 @@ export function loadConfig(env: ConfigEnv = process.env): AppConfig {
     isProduction,
     uploadMaxFiles,
     uploadMaxFileBytes,
-    uploadMaxBatchBytes
+    uploadMaxBatchBytes,
+    fileListMaxEntries,
+    fileTextMaxBytes,
+    filePreviewMaxBytes
   };
 }
 

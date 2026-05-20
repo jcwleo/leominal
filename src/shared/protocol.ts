@@ -56,6 +56,112 @@ export interface UploadResponse {
   results: UploadResultEntry[];
 }
 
+export interface FileRootRequest {
+  terminalId: TerminalId;
+}
+
+export interface FileRootResponse {
+  rootToken: string;
+  terminalId: TerminalId;
+  rootPath: string;
+  issuedAt: string;
+}
+
+export interface FilePathRequest {
+  rootToken: string;
+  path: string;
+}
+
+export type FileEntryKind = 'file' | 'directory' | 'symlink' | 'other';
+export type FilePreviewKind = 'image' | 'pdf' | 'none';
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  kind: FileEntryKind;
+  size: number | null;
+  mtime: string | null;
+  editable: boolean;
+  previewKind: FilePreviewKind;
+}
+
+export interface FileListRequest extends FilePathRequest {}
+
+export interface FileListResponse {
+  rootPath: string;
+  path: string;
+  entries: FileEntry[];
+}
+
+export interface FileVersion {
+  size: number;
+  mtimeMs: number;
+  ino?: number;
+}
+
+export interface FileReadRequest extends FilePathRequest {}
+
+export interface FileReadResponse {
+  path: string;
+  content: string;
+  language: 'text' | 'markdown';
+  version: FileVersion;
+}
+
+export interface FileWriteRequest extends FilePathRequest {
+  content: string;
+  expectedVersion: FileVersion;
+}
+
+export interface FileWriteResponse {
+  path: string;
+  version: FileVersion;
+}
+
+export interface FileOpenResponse {
+  opened: true;
+}
+
+export interface FileOpenRequest extends FilePathRequest {
+  terminalId?: TerminalId;
+}
+
+export interface FileCreateRequest extends FilePathRequest {
+  kind: 'file' | 'directory';
+}
+
+export interface FileCreateResponse {
+  entry: FileEntry;
+}
+
+export interface FileMoveRequest {
+  rootToken: string;
+  sourcePath: string;
+  destinationPath: string;
+}
+
+export interface FileMoveResponse {
+  entry: FileEntry;
+}
+
+export interface FileDeletePreviewRequest extends FilePathRequest {}
+
+export interface FileDeletePreviewResponse {
+  path: string;
+  kind: FileEntryKind;
+  descendantCount: number;
+  previewToken: string;
+}
+
+export interface FileDeleteRequest extends FilePathRequest {
+  previewToken: string;
+}
+
+export interface FileDeleteResponse {
+  path: string;
+  deleted: true;
+}
+
 export type ClientTerminalMessage =
   | { type: 'input'; terminalId: TerminalId; data: string }
   | { type: 'resize'; terminalId: TerminalId; cols: number; rows: number }

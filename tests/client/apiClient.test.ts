@@ -91,6 +91,79 @@ describe('client API helper', () => {
     });
   });
 
+  it('posts file explorer root requests with the shared request shape', async () => {
+    const response = {
+      rootToken: 'root-token',
+      terminalId: 'term-alpha',
+      rootPath: '/workspace/project',
+      issuedAt: '2026-05-20T00:00:00.000Z'
+    };
+    const fetchMock = vi.fn(async () => jsonResponse(response));
+    const client = createApiClient(fetchMock);
+
+    await expect(client.createFileRoot({ terminalId: 'term-alpha' })).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/files/root', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ terminalId: 'term-alpha' })
+    });
+  });
+
+  it('posts file list, read, write, create, move, and delete requests to file endpoints', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true }));
+    const client = createApiClient(fetchMock);
+    const rootToken = 'root-token';
+    const version = { size: 5, mtimeMs: 1000, ino: 2 };
+
+    await client.listFiles({ rootToken, path: 'src' });
+    await client.readFile({ rootToken, path: 'README.md' });
+    await client.writeFile({ rootToken, path: 'README.md', content: '# title', expectedVersion: version });
+    await client.createFileEntry({ rootToken, path: 'notes/todo.md', kind: 'file' });
+    await client.moveFileEntry({ rootToken, sourcePath: 'notes/todo.md', destinationPath: 'docs/todo.md' });
+    await client.previewDeleteFileEntry({ rootToken, path: 'docs/todo.md' });
+    await client.deleteFileEntry({ rootToken, path: 'docs/todo.md', previewToken: 'delete-token' });
+    await client.openFileInTerminal({ rootToken, path: 'README.md', terminalId: 'term-created' });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/files/list', jsonPost({ rootToken, path: 'src' }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/files/read', jsonPost({ rootToken, path: 'README.md' }));
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      '/api/files/write',
+      jsonPost({ rootToken, path: 'README.md', content: '# title', expectedVersion: version })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/files/create', jsonPost({ rootToken, path: 'notes/todo.md', kind: 'file' }));
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      '/api/files/move',
+      jsonPost({ rootToken, sourcePath: 'notes/todo.md', destinationPath: 'docs/todo.md' })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(6, '/api/files/delete-preview', jsonPost({ rootToken, path: 'docs/todo.md' }));
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      7,
+      '/api/files/delete',
+      jsonPost({ rootToken, path: 'docs/todo.md', previewToken: 'delete-token' })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(8, '/api/files/open', jsonPost({ rootToken, path: 'README.md', terminalId: 'term-created' }));
+  });
+
+  it('posts preview blob requests with same-origin credentials', async () => {
+    const blob = new Blob(['preview'], { type: 'image/png' });
+    const fetchMock = vi.fn(async () => new Response(blob, { status: 200, headers: { 'content-type': 'image/png' } }));
+    const client = createApiClient(fetchMock);
+
+    const response = await client.previewFile({ rootToken: 'root-token', path: 'image.png' });
+
+    expect(await response.text()).toBe('preview');
+    expect(fetchMock).toHaveBeenCalledWith('/api/files/preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ rootToken: 'root-token', path: 'image.png' })
+    });
+  });
+
   it('throws ApiError for non-2xx responses', async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ error: 'unauthorized' }, 401));
     const client = createApiClient(fetchMock);
@@ -113,4 +186,13 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { 'content-type': 'application/json' }
   });
+}
+
+function jsonPost(body: unknown): RequestInit {
+  return {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(body)
+  };
 }

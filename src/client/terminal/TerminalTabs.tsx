@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { TerminalId, TerminalSummary, TerminalTabLayout } from '../../shared/types.js';
 import { splitDownShortcutLabel, splitRightShortcutLabel } from './keyboardShortcuts.js';
-import { listTabTerminalIds } from './terminalReducer.js';
+import { countTabPanes, listTabTerminalIds } from './terminalReducer.js';
 
 interface TerminalTabsProps {
   tabs: TerminalTabLayout[];
@@ -92,6 +92,7 @@ export function TerminalTabs({
       <div className="terminal-tab-list">
         {tabs.map((tab) => {
           const terminalIds = listTabTerminalIds(tab);
+          const paneCount = countTabPanes(tab);
           const activeTerminal = terminals[tab.activeTerminalId];
           const title = tab.title || activeTerminal?.title || tab.activeTerminalId;
           const active = tab.id === activeTabId;
@@ -125,7 +126,7 @@ export function TerminalTabs({
                         }
                       }}
                       />
-                    <small>{terminalIds.length}</small>
+                    <small>{paneCount}</small>
                   </form>
                 ) : (
                   <button
@@ -140,7 +141,7 @@ export function TerminalTabs({
                     }}
                   >
                     <span>{title}</span>
-                    <small>{terminalIds.length} pane{terminalIds.length === 1 ? '' : 's'}</small>
+                    <small>{paneCount} pane{paneCount === 1 ? '' : 's'}</small>
                   </button>
                 )}
                 {tabs.length > 1 && !editing ? (

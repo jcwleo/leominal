@@ -6,12 +6,13 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import path from 'node:path';
 import type { AppConfig } from './config.js';
 import { registerAuthRoutes, type AuthRouteServices } from './routes/authRoutes.js';
+import { registerFileRoutes, type FileRouteServices } from './routes/fileRoutes.js';
 import { registerTerminalLayoutRoutes, type TerminalLayoutRouteServices } from './routes/terminalLayoutRoutes.js';
 import { registerTerminalRoutes, type TerminalRouteServices } from './routes/terminalRoutes.js';
 import { registerTerminalWebSocket } from './routes/terminalWebSocket.js';
 import { registerUploadRoutes, type UploadRouteServices } from './routes/uploadRoutes.js';
 
-export interface BuildAppServices extends AuthRouteServices, TerminalRouteServices, TerminalLayoutRouteServices, UploadRouteServices {}
+export interface BuildAppServices extends AuthRouteServices, TerminalRouteServices, TerminalLayoutRouteServices, UploadRouteServices, FileRouteServices {}
 
 export async function buildApp(config: AppConfig, services: BuildAppServices): Promise<FastifyInstance> {
   const app = Fastify({ logger: true });
@@ -33,6 +34,7 @@ export async function buildApp(config: AppConfig, services: BuildAppServices): P
   await registerTerminalRoutes(app, config, services);
   await registerTerminalLayoutRoutes(app, config, services);
   await registerUploadRoutes(app, config, services);
+  await registerFileRoutes(app, config, services);
   await registerTerminalWebSocket(app, config, services);
 
   app.addHook('onSend', async (_request, reply, payload) => {

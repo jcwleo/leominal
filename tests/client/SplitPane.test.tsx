@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LayoutNode, TerminalSummary } from '../../src/shared/types.js';
+import type { ApiClient } from '../../src/client/api/client.js';
 
 vi.mock('../../src/client/terminal/XtermPane.js', async () => {
   const ReactModule = await import('react');
@@ -59,6 +60,8 @@ function terminal(id: string): TerminalSummary {
   };
 }
 
+const api = {} as ApiClient;
+
 describe('SplitPane', () => {
   afterEach(cleanup);
 
@@ -79,11 +82,14 @@ describe('SplitPane', () => {
           'term-left': terminal('term-left'),
           'term-right': terminal('term-right')
         }}
+        editors={{}}
+        api={api}
         activeTerminalId="term-left"
         onSelect={() => undefined}
         onExit={() => undefined}
         onSnapshot={() => undefined}
         onClose={() => undefined}
+        onCloseEditor={() => undefined}
         onResize={onResize}
       />
     );
@@ -125,11 +131,14 @@ describe('SplitPane', () => {
           'term-top': terminal('term-top'),
           'term-bottom': terminal('term-bottom')
         }}
+        editors={{}}
+        api={api}
         activeTerminalId="term-top"
         onSelect={() => undefined}
         onExit={() => undefined}
         onSnapshot={() => undefined}
         onClose={onClose}
+        onCloseEditor={() => undefined}
         onResize={() => undefined}
       />
     );
@@ -141,15 +150,65 @@ describe('SplitPane', () => {
       <SplitPane
         node={{ type: 'pane', terminalId: 'term-top' }}
         terminals={{ 'term-top': terminal('term-top') }}
+        editors={{}}
+        api={api}
         activeTerminalId="term-top"
         onSelect={() => undefined}
         onExit={() => undefined}
         onSnapshot={() => undefined}
         onClose={onClose}
+        onCloseEditor={() => undefined}
         onResize={() => undefined}
       />
     );
 
     expect(screen.queryByRole('button', { name: 'Close pane term-top' })).toBeNull();
+  });
+
+  it('renders embedded editor panes and closes them through the editor callback', () => {
+    const onCloseEditor = vi.fn();
+    const editorApi = {
+      writeFile: vi.fn()
+    } as unknown as ApiClient;
+
+    render(
+      <SplitPane
+        node={{
+          type: 'split',
+          direction: 'vertical',
+          ratio: 0.5,
+          first: { type: 'pane', terminalId: 'term-left' },
+          second: { type: 'editor', editorId: 'editor-notes', title: 'notes.txt' }
+        }}
+        terminals={{ 'term-left': terminal('term-left') }}
+        editors={{
+          'editor-notes': {
+            id: 'editor-notes',
+            title: 'notes.txt',
+            rootToken: 'root-alpha',
+            path: 'notes.txt',
+            read: {
+              path: 'notes.txt',
+              content: 'hello\n',
+              language: 'text',
+              version: { size: 6, mtimeMs: 1_779_000_000_000, ino: 7 }
+            }
+          }
+        }}
+        api={editorApi}
+        activeTerminalId="term-left"
+        onSelect={() => undefined}
+        onExit={() => undefined}
+        onSnapshot={() => undefined}
+        onClose={() => undefined}
+        onCloseEditor={onCloseEditor}
+        onResize={() => undefined}
+      />
+    );
+
+    expect(screen.getByLabelText('Editor for notes.txt')).toHaveValue('hello\n');
+    fireEvent.click(screen.getByRole('button', { name: 'Close editor notes.txt' }));
+
+    expect(onCloseEditor).toHaveBeenCalledWith('editor-notes');
   });
 });

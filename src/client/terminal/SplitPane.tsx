@@ -1,10 +1,14 @@
 import React from 'react';
 import type { LayoutNode, TerminalId, TerminalSummary } from '../../shared/types.js';
+import type { ApiClient } from '../api/client.js';
+import { TextEditorPane, type TextEditorPaneModel } from '../files/TextEditorPane.js';
 import { XtermPane } from './XtermPane.js';
 
 interface SplitPaneProps {
   node: LayoutNode;
   terminals: Record<TerminalId, TerminalSummary>;
+  editors: Record<string, TextEditorPaneModel>;
+  api: ApiClient;
   activeTerminalId: TerminalId;
   path?: number[];
   totalPanes?: number;
@@ -13,11 +17,14 @@ interface SplitPaneProps {
   onResize: (path: number[], ratio: number) => void;
   onExit: (terminalId: TerminalId, exitCode: number | null) => void;
   onSnapshot: (terminal: TerminalSummary) => void;
+  onCloseEditor: (editorId: string) => void;
 }
 
 export function SplitPane({
   node,
   terminals,
+  editors,
+  api,
   activeTerminalId,
   path = [],
   totalPanes,
@@ -25,7 +32,8 @@ export function SplitPane({
   onClose,
   onResize,
   onExit,
-  onSnapshot
+  onSnapshot,
+  onCloseEditor
 }: SplitPaneProps) {
   const paneCount = totalPanes ?? countPanes(node);
 
@@ -47,6 +55,14 @@ export function SplitPane({
     );
   }
 
+  if (node.type === 'editor') {
+    const editor = editors[node.editorId];
+    if (!editor) {
+      return <div className="missing-pane">Editor unavailable</div>;
+    }
+    return <TextEditorPane api={api} editor={editor} canClose={paneCount > 1} onClose={() => onCloseEditor(node.editorId)} />;
+  }
+
   const firstSize = `${node.ratio * 100}%`;
   const secondSize = `${(1 - node.ratio) * 100}%`;
   const gridTemplate =
@@ -60,6 +76,8 @@ export function SplitPane({
         <SplitPane
           node={node.first}
           terminals={terminals}
+          editors={editors}
+          api={api}
           activeTerminalId={activeTerminalId}
           path={[...path, 0]}
           totalPanes={paneCount}
@@ -68,6 +86,7 @@ export function SplitPane({
           onResize={onResize}
           onExit={onExit}
           onSnapshot={onSnapshot}
+          onCloseEditor={onCloseEditor}
         />
       </div>
       <SplitDivider direction={node.direction} path={path} onResize={onResize} />
@@ -75,6 +94,8 @@ export function SplitPane({
         <SplitPane
           node={node.second}
           terminals={terminals}
+          editors={editors}
+          api={api}
           activeTerminalId={activeTerminalId}
           path={[...path, 1]}
           totalPanes={paneCount}
@@ -83,6 +104,7 @@ export function SplitPane({
           onResize={onResize}
           onExit={onExit}
           onSnapshot={onSnapshot}
+          onCloseEditor={onCloseEditor}
         />
       </div>
     </div>
@@ -147,5 +169,8 @@ function SplitDivider({
 }
 
 function countPanes(node: LayoutNode): number {
-  return node.type === 'pane' ? 1 : countPanes(node.first) + countPanes(node.second);
+  if (node.type === 'pane' || node.type === 'editor') {
+    return 1;
+  }
+  return countPanes(node.first) + countPanes(node.second);
 }

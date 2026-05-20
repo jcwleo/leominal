@@ -10,6 +10,7 @@ import {
   renameTab,
   renameWorkspace,
   selectWorkspace,
+  serializeWorkspaceState,
   splitActivePane,
   terminalReducer
 } from '../../src/client/terminal/terminalReducer.js';
@@ -65,6 +66,29 @@ describe('terminal layout reducer', () => {
       first: { type: 'pane', terminalId: 'term-alpha' },
       second: { type: 'pane', terminalId: 'term-beta' }
     });
+  });
+
+  it('splits an embedded editor pane beside the active terminal without persisting the editor node', () => {
+    const alpha = terminal('term-alpha', 'Alpha');
+    const initial = createTabForTerminal(createEmptyTerminalState(), alpha);
+
+    const state = terminalReducer(initial, {
+      type: 'editor.split',
+      editorId: 'editor-notes',
+      title: 'notes.txt',
+      direction: 'vertical'
+    });
+
+    const activeWorkspace = state.workspaces[0];
+    expect(activeWorkspace?.tabs[0]?.activeTerminalId).toBe('term-alpha');
+    expect(activeWorkspace?.tabs[0]?.root).toEqual({
+      type: 'split',
+      direction: 'vertical',
+      ratio: 0.5,
+      first: { type: 'pane', terminalId: 'term-alpha' },
+      second: { type: 'editor', editorId: 'editor-notes', title: 'notes.txt' }
+    });
+    expect(serializeWorkspaceState(state).workspaces[0]?.tabs[0]?.root).toEqual({ type: 'pane', terminalId: 'term-alpha' });
   });
 
   it('updates a split ratio at the requested tree path', () => {
@@ -129,6 +153,19 @@ describe('terminal layout reducer', () => {
     expect(backToFirst.workspaces[1]?.tabs.map((tab) => tab.title)).toEqual(['Beta']);
     expect(backToFirst.workspaces[0]?.activeTabId).toBe('tab-term-alpha');
     expect(backToFirst.workspaces[1]?.activeTabId).toBe('tab-term-beta');
+  });
+
+  it('preserves empty workspaces when serializing layout changes', () => {
+    const first = createTabForTerminal(createEmptyTerminalState(), terminal('term-alpha', 'Alpha'));
+    const secondWorkspace = createWorkspace(first, { id: 'workspace-two', title: 'Two' });
+
+    expect(serializeWorkspaceState(secondWorkspace)).toMatchObject({
+      activeWorkspaceId: 'workspace-two',
+      workspaces: [
+        { id: 'workspace-default', tabs: [{ id: 'tab-term-alpha' }] },
+        { id: 'workspace-two', title: 'Two', activeTabId: null, tabs: [] }
+      ]
+    });
   });
 
   it('renames a tab without changing terminal state', () => {

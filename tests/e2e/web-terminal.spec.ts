@@ -5,7 +5,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import WebSocket from 'ws';
-import type { ServerTerminalMessage, UploadManifest, UploadResponse } from '../../src/shared/protocol.js';
+import type {
+  FileCreateResponse,
+  FileDeletePreviewResponse,
+  FileListResponse,
+  FileReadResponse,
+  FileRootResponse,
+  ServerTerminalMessage,
+  UploadManifest,
+  UploadResponse
+} from '../../src/shared/protocol.js';
 import type { TerminalSummary } from '../../src/shared/types.js';
 
 const e2ePort = Number(process.env.LEOMINAL_E2E_PORT ?? process.env.LEOMINAL_PORT ?? '3117');
@@ -85,8 +94,7 @@ test('authenticates with the stored password, opens a PTY, reconnects, splits, a
   expect(snapshot.type).toBe('snapshot');
 
   const splitCwd = await realpath('/tmp');
-  firstSocket.send(JSON.stringify({ type: 'input', terminalId: terminal.id, data: `cd ${splitCwd} && printf leominal-e2e\\\\n\r` }));
-  await waitForOutput(firstSocket, 'leominal-e2e');
+  await runTerminalCommand(firstSocket, terminal.id, `cd ${shellQuote(splitCwd)}`, 'leominal-e2e');
   firstSocket.close();
 
   const reconnected = await connectTerminal(terminal.id, cookieHeader);
@@ -129,8 +137,7 @@ test('uploads files into the live PTY cwd without overwriting collisions', async
   const snapshot = await nextTerminalMessage(socket);
   expect(snapshot.type).toBe('snapshot');
 
-  socket.send(JSON.stringify({ type: 'input', terminalId: terminal.id, data: `cd ${shellQuote(uploadRoot)} && printf leominal-upload-cwd\\\\n\r` }));
-  await waitForOutput(socket, 'leominal-upload-cwd');
+  await runTerminalCommand(socket, terminal.id, `cd ${shellQuote(uploadRoot)}`, 'leominal-upload-cwd');
 
   const manifest: UploadManifest = {
     terminalId: terminal.id,
@@ -165,6 +172,96 @@ test('uploads files into the live PTY cwd without overwriting collisions', async
   }
 });
 
+test('file explorer API is scoped to the active PTY cwd and blocks stale or escaping writes', async ({ request }) => {
+  await authenticateRequest(request);
+  const fileRoot = await realpath(await mkdtemp(path.join(os.tmpdir(), 'leominal-e2e-files-')));
+  await writeFile(path.join(fileRoot, 'README.md'), '# old\n');
+
+  const create = await request.post('/api/terminals', {
+    headers: { origin: baseUrl },
+    data: { cols: 80, rows: 24 }
+  });
+  expect(create.status()).toBe(201);
+  const terminal = ((await create.json()) as { terminal: TerminalSummary }).terminal;
+  const cookieHeader = await cookiesForWebSocket(request);
+  const socket = await connectTerminal(terminal.id, cookieHeader);
+  const snapshot = await nextTerminalMessage(socket);
+  expect(snapshot.type).toBe('snapshot');
+
+  await runTerminalCommand(socket, terminal.id, `cd ${shellQuote(fileRoot)}`, 'leominal-files-cwd');
+
+  const rootResponse = await request.post('/api/files/root', {
+    headers: { origin: baseUrl },
+    data: { terminalId: terminal.id }
+  });
+  expect(rootResponse.status()).toBe(200);
+  const rootBody = (await rootResponse.json()) as FileRootResponse;
+  expect(rootBody.rootPath).toBe(fileRoot);
+
+  const listResponse = await filePost(request, '/api/files/list', { rootToken: rootBody.rootToken, path: '' });
+  expect(listResponse.status()).toBe(200);
+  expect(((await listResponse.json()) as FileListResponse).entries).toEqual(
+    expect.arrayContaining([expect.objectContaining({ name: 'README.md', path: 'README.md', kind: 'file', editable: true })])
+  );
+
+  const createDirectory = await filePost(request, '/api/files/create', { rootToken: rootBody.rootToken, path: 'notes', kind: 'directory' });
+  expect(createDirectory.status()).toBe(200);
+  const createFile = await filePost(request, '/api/files/create', { rootToken: rootBody.rootToken, path: 'notes/todo.txt', kind: 'file' });
+  expect(createFile.status()).toBe(200);
+  expect(((await createFile.json()) as FileCreateResponse).entry).toEqual(
+    expect.objectContaining({ path: 'notes/todo.txt', kind: 'file', editable: true })
+  );
+
+  const readResponse = await filePost(request, '/api/files/read', { rootToken: rootBody.rootToken, path: 'README.md' });
+  expect(readResponse.status()).toBe(200);
+  const readBody = (await readResponse.json()) as FileReadResponse;
+  expect(readBody.content).toBe('# old\n');
+  expect(readBody.language).toBe('markdown');
+
+  const writeResponse = await filePost(request, '/api/files/write', {
+    rootToken: rootBody.rootToken,
+    path: 'README.md',
+    content: '# newer\n',
+    expectedVersion: readBody.version
+  });
+  expect(writeResponse.status()).toBe(200);
+  expect(await readFile(path.join(fileRoot, 'README.md'), 'utf8')).toBe('# newer\n');
+
+  await writeFile(path.join(fileRoot, 'README.md'), '# changed outside leominal\n');
+  const staleWrite = await filePost(request, '/api/files/write', {
+    rootToken: rootBody.rootToken,
+    path: 'README.md',
+    content: '# stale\n',
+    expectedVersion: readBody.version
+  });
+  expect(staleWrite.status()).toBe(409);
+  expect(await readFile(path.join(fileRoot, 'README.md'), 'utf8')).toBe('# changed outside leominal\n');
+
+  const moveResponse = await filePost(request, '/api/files/move', {
+    rootToken: rootBody.rootToken,
+    sourcePath: 'notes/todo.txt',
+    destinationPath: 'notes/done.txt'
+  });
+  expect(moveResponse.status()).toBe(200);
+  const deletePreview = await filePost(request, '/api/files/delete-preview', { rootToken: rootBody.rootToken, path: 'notes/done.txt' });
+  expect(deletePreview.status()).toBe(200);
+  const deleteResponse = await filePost(request, '/api/files/delete', {
+    rootToken: rootBody.rootToken,
+    path: 'notes/done.txt',
+    previewToken: ((await deletePreview.json()) as FileDeletePreviewResponse).previewToken
+  });
+  expect(deleteResponse.status()).toBe(200);
+
+  const unsafePath = await filePost(request, '/api/files/read', { rootToken: rootBody.rootToken, path: '../escape.txt' });
+  expect(unsafePath.status()).toBe(400);
+
+  socket.close();
+  expect((await request.delete(`/api/terminals/${terminal.id}`, { headers: { origin: baseUrl } })).status()).toBe(204);
+  if (terminal.pid) {
+    await expectProcessGone(terminal.pid);
+  }
+});
+
 async function authenticateRequest(request: APIRequestContext): Promise<void> {
   const session = await request.get('/api/auth/session');
   expect(session.ok()).toBe(true);
@@ -175,6 +272,13 @@ async function authenticateRequest(request: APIRequestContext): Promise<void> {
     data: { password: e2ePassword }
   });
   expect(response.ok()).toBe(true);
+}
+
+async function filePost(request: APIRequestContext, url: string, data: unknown) {
+  return request.post(url, {
+    headers: { origin: baseUrl },
+    data
+  });
 }
 
 async function expectTerminalToFillWorkspace(page: Page): Promise<void> {
@@ -240,6 +344,18 @@ async function connectTerminal(terminalId: string, cookieHeader: string): Promis
   return socket;
 }
 
+async function runTerminalCommand(socket: WebSocket, terminalId: string, command: string, marker: string): Promise<void> {
+  const output = waitForOutput(socket, marker);
+  socket.send(
+    JSON.stringify({
+      type: 'input',
+      terminalId,
+      data: `${command} && printf '${octalEscape(marker)}\\n'\r`
+    })
+  );
+  await output;
+}
+
 function nextTerminalMessage(socket: WebSocket): Promise<ServerTerminalMessage> {
   return new Promise((resolve, reject) => {
     socket.once('message', (data) => resolve(JSON.parse(data.toString()) as ServerTerminalMessage));
@@ -248,21 +364,38 @@ function nextTerminalMessage(socket: WebSocket): Promise<ServerTerminalMessage> 
 }
 
 async function waitForOutput(socket: WebSocket, needle: string): Promise<void> {
-  let output = '';
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const message = await nextTerminalMessage(socket);
-    if (message.type === 'output') {
-      output += message.data;
-      if (output.includes(needle)) {
-        return;
+  await new Promise<void>((resolve, reject) => {
+    let output = '';
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for terminal output: ${needle}`));
+    }, 10_000);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      socket.off('message', onMessage);
+      socket.off('error', onError);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onMessage = (data: WebSocket.RawData) => {
+      const message = JSON.parse(data.toString()) as ServerTerminalMessage;
+      if (message.type === 'output') {
+        output += message.data;
+        if (output.includes(needle)) {
+          cleanup();
+          resolve();
+        }
       }
-    }
-    if (message.type === 'error') {
-      throw new Error(message.message);
-    }
-  }
-  throw new Error(`Timed out waiting for terminal output: ${needle}`);
+      if (message.type === 'error') {
+        cleanup();
+        reject(new Error(message.message));
+      }
+    };
+    socket.on('message', onMessage);
+    socket.on('error', onError);
+  });
 }
 
 async function expectProcessGone(pid: number): Promise<void> {
@@ -283,4 +416,8 @@ async function expectProcessGone(pid: number): Promise<void> {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function octalEscape(value: string): string {
+  return [...Buffer.from(value, 'utf8')].map((byte) => `\\${byte.toString(8).padStart(3, '0')}`).join('');
 }

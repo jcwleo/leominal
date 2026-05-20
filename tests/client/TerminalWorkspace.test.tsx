@@ -5,6 +5,26 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   CreateTerminalRequest,
+  FileCreateRequest,
+  FileCreateResponse,
+  FileDeletePreviewRequest,
+  FileDeletePreviewResponse,
+  FileDeleteRequest,
+  FileDeleteResponse,
+  FileEntry,
+  FileListRequest,
+  FileListResponse,
+  FileMoveRequest,
+  FileMoveResponse,
+  FileOpenResponse,
+  FileOpenRequest,
+  FilePathRequest,
+  FileReadRequest,
+  FileReadResponse,
+  FileRootRequest,
+  FileRootResponse,
+  FileWriteRequest,
+  FileWriteResponse,
   PasswordRequest,
   TerminalLayoutResponse,
   TerminalListResponse,
@@ -22,17 +42,62 @@ vi.mock('../../src/client/api/uploadClient.js', () => ({
 }));
 
 vi.mock('../../src/client/terminal/SplitPane.js', () => ({
-  SplitPane: ({ onClose, onResize }: { onClose?: (terminalId: string) => void; onResize?: (path: number[], ratio: number) => void }) => (
-    <div data-testid="split-pane">
-      terminal canvas
-      <button type="button" onClick={() => onClose?.('term-alpha')}>
-        Close pane term-alpha
-      </button>
-      <button type="button" onClick={() => onResize?.([], 0.7)}>
-        Resize panes
-      </button>
-    </div>
-  )
+  SplitPane: ({
+    node,
+    editors = {},
+    onClose,
+    onCloseEditor,
+    onResize,
+    onSelect
+  }: {
+    node?: import('../../src/shared/types.js').LayoutNode;
+    editors?: Record<string, { title: string; read: { content: string } }>;
+    onClose?: (terminalId: string) => void;
+    onCloseEditor?: (editorId: string) => void;
+    onResize?: (path: number[], ratio: number) => void;
+    onSelect?: (terminalId: string) => void;
+  }) => {
+    function renderNode(layoutNode?: import('../../src/shared/types.js').LayoutNode): React.ReactNode {
+      if (!layoutNode) {
+        return null;
+      }
+      if (layoutNode.type === 'split') {
+        return (
+          <>
+            {renderNode(layoutNode.first)}
+            {renderNode(layoutNode.second)}
+          </>
+        );
+      }
+      if (layoutNode.type === 'editor') {
+        const editor = editors[layoutNode.editorId];
+        return (
+          <section aria-label={`Editor pane ${editor?.title ?? layoutNode.title}`}>
+            <textarea aria-label={`Editor for ${editor?.title ?? layoutNode.title}`} readOnly value={editor?.read.content ?? ''} />
+            <button type="button" onClick={() => onCloseEditor?.(layoutNode.editorId)}>
+              Close editor {editor?.title ?? layoutNode.title}
+            </button>
+          </section>
+        );
+      }
+      return <span>terminal canvas</span>;
+    }
+
+    return (
+      <div data-testid="split-pane">
+        {renderNode(node)}
+        <button type="button" onClick={() => onClose?.('term-alpha')}>
+          Close pane term-alpha
+        </button>
+        <button type="button" onClick={() => onResize?.([], 0.7)}>
+          Resize panes
+        </button>
+        <button type="button" onClick={() => onSelect?.('term-alpha')}>
+          Select pane term-alpha
+        </button>
+      </div>
+    );
+  }
 }));
 
 import { TerminalWorkspace } from '../../src/client/terminal/TerminalWorkspace.js';
@@ -49,6 +114,16 @@ function terminal(id: string, title = 'Bash'): TerminalSummary {
     updatedAt: '2026-05-17T00:00:00.000Z',
     status: 'running',
     exitCode: null
+  };
+}
+
+function fileEntry(overrides: Partial<FileEntry> & Pick<FileEntry, 'name' | 'path' | 'kind'>): FileEntry {
+  return {
+    size: null,
+    mtime: '2026-05-20T00:00:00.000Z',
+    editable: false,
+    previewKind: 'none',
+    ...overrides
   };
 }
 
@@ -86,7 +161,59 @@ function createApi(initialTerminals: TerminalSummary[] = [terminal('term-alpha',
     }),
     closeTerminal: vi.fn(async (terminalId: TerminalId): Promise<void> => {
       state.terminals = state.terminals.filter((candidate) => candidate.id !== terminalId);
-    })
+    }),
+    createFileRoot: vi.fn(async (request: FileRootRequest): Promise<FileRootResponse> => ({
+      rootToken: `root-${request.terminalId}`,
+      terminalId: request.terminalId,
+      rootPath: `/workspace/${request.terminalId}`,
+      issuedAt: '2026-05-20T00:00:00.000Z'
+    })),
+    listFiles: vi.fn(async (request: FileListRequest): Promise<FileListResponse> => ({
+      rootPath: `/workspace/${request.rootToken.replace(/^root-/, '')}`,
+      path: request.path,
+      entries: request.path === '' ? [fileEntry({ name: 'notes.txt', path: 'notes.txt', kind: 'file', size: 12, editable: true })] : []
+    })),
+    readFile: vi.fn(async (request: FileReadRequest): Promise<FileReadResponse> => ({
+      path: request.path,
+      content: 'hello\n',
+      language: 'text',
+      version: { size: 6, mtimeMs: 1_779_000_000_000, ino: 7 }
+    })),
+    writeFile: vi.fn(async (request: FileWriteRequest): Promise<FileWriteResponse> => ({
+      path: request.path,
+      version: request.expectedVersion
+    })),
+    createFileEntry: vi.fn(async (request: FileCreateRequest): Promise<FileCreateResponse> => ({
+      entry: {
+        name: request.path,
+        path: request.path,
+        kind: request.kind === 'directory' ? 'directory' : 'file',
+        size: request.kind === 'directory' ? null : 0,
+        mtime: null,
+        editable: request.kind === 'file',
+        previewKind: 'none'
+      }
+    })),
+    moveFileEntry: vi.fn(async (request: FileMoveRequest): Promise<FileMoveResponse> => ({
+      entry: {
+        name: request.destinationPath,
+        path: request.destinationPath,
+        kind: 'file',
+        size: 0,
+        mtime: null,
+        editable: true,
+        previewKind: 'none'
+      }
+    })),
+    previewDeleteFileEntry: vi.fn(async (request: FileDeletePreviewRequest): Promise<FileDeletePreviewResponse> => ({
+      path: request.path,
+      kind: 'file',
+      descendantCount: 0,
+      previewToken: 'delete-token'
+    })),
+    deleteFileEntry: vi.fn(async (request: FileDeleteRequest): Promise<FileDeleteResponse> => ({ path: request.path, deleted: true })),
+    openFileInTerminal: vi.fn(async (_request: FileOpenRequest): Promise<FileOpenResponse> => ({ opened: true })),
+    previewFile: vi.fn(async (_request: FilePathRequest): Promise<Blob> => new Blob(['preview']))
   };
 }
 
@@ -166,6 +293,70 @@ describe('TerminalWorkspace', () => {
     expect(screen.queryByRole('toolbar', { name: 'Workspace actions' })).toBeNull();
     expect(screen.queryByText('1 pane(s)')).toBeNull();
     expect(screen.getByTestId('split-pane')).toBeVisible();
+  });
+
+  it('switches the sidebar between workspaces and files mode', async () => {
+    const api = createApi();
+
+    render(<TerminalWorkspace api={api} />);
+
+    const sidebarTabs = await screen.findByRole('tablist', { name: 'Sidebar mode' });
+    expect(within(sidebarTabs).getByRole('tab', { name: 'Workspaces' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('navigation', { name: 'Workspaces' })).toBeVisible();
+
+    fireEvent.click(within(sidebarTabs).getByRole('tab', { name: 'Files' }));
+
+    expect(within(sidebarTabs).getByRole('tab', { name: 'Files' })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByRole('region', { name: 'Files' })).toBeVisible();
+    expect(screen.getByTestId('split-pane')).toBeVisible();
+  });
+
+  it('requests a files root only after the files sidebar tab opens', async () => {
+    const api = createApi();
+
+    render(<TerminalWorkspace api={api} />);
+
+    const sidebarTabs = await screen.findByRole('tablist', { name: 'Sidebar mode' });
+    expect(api.createFileRoot).not.toHaveBeenCalled();
+
+    fireEvent.click(within(sidebarTabs).getByRole('tab', { name: 'Files' }));
+
+    await waitFor(() => expect(api.createFileRoot).toHaveBeenCalledWith({ terminalId: 'term-alpha' }));
+    expect(api.listFiles).toHaveBeenCalledWith({ rootToken: 'root-term-alpha', path: '' });
+  });
+
+  it('refreshes the files root when the active pane changes', async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha'), terminal('term-beta', 'Beta')]);
+    vi.mocked(api.getTerminalLayout).mockResolvedValue(serverLayout(splitLayout(), 4));
+
+    render(<TerminalWorkspace api={api} />);
+
+    const sidebarTabs = await screen.findByRole('tablist', { name: 'Sidebar mode' });
+    fireEvent.click(within(sidebarTabs).getByRole('tab', { name: 'Files' }));
+
+    await waitFor(() => expect(api.createFileRoot).toHaveBeenCalledWith({ terminalId: 'term-beta' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select pane term-alpha' }));
+
+    await waitFor(() => expect(api.createFileRoot).toHaveBeenLastCalledWith({ terminalId: 'term-alpha' }));
+  });
+
+  it('opens a file from the explorer in an embedded editor split pane', async () => {
+    const api = createApi();
+
+    render(<TerminalWorkspace api={api} />);
+
+    const sidebarTabs = await screen.findByRole('tablist', { name: 'Sidebar mode' });
+    fireEvent.click(within(sidebarTabs).getByRole('tab', { name: 'Files' }));
+
+    const notes = await screen.findByRole('button', { name: 'Open file notes.txt' });
+    fireEvent.click(notes);
+    expect(await screen.findByLabelText('Preview for notes.txt')).toHaveTextContent('hello');
+
+    fireEvent.doubleClick(notes);
+
+    expect(await screen.findByLabelText('Editor for notes.txt')).toHaveValue('hello\n');
+    expect(api.createTerminal).not.toHaveBeenCalled();
+    expect(api.openFileInTerminal).not.toHaveBeenCalled();
   });
 
   it('collapses the workspace sidebar and disables rename while collapsed', async () => {

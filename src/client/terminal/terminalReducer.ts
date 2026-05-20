@@ -28,6 +28,8 @@ export type TerminalAction =
   | { type: 'terminal.updated'; terminal: TerminalSummary }
   | { type: 'terminal.exited'; terminalId: TerminalId; exitCode: number | null }
   | { type: 'terminal.closed'; terminalId: TerminalId }
+  | { type: 'editor.split'; editorId: string; title: string; direction: 'horizontal' | 'vertical' }
+  | { type: 'editor.closed'; editorId: string }
   | { type: 'pane.selected'; terminalId: TerminalId }
   | { type: 'pane.resized'; path: number[]; ratio: number }
   | { type: 'tab.selected'; tabId: string }
@@ -67,6 +69,10 @@ export function terminalReducer(state: TerminalState, action: TerminalAction): T
       return markTerminalExited(state, action.terminalId, action.exitCode);
     case 'terminal.closed':
       return removeTerminalPane(state, action.terminalId);
+    case 'editor.split':
+      return splitEditorPane(state, action.editorId, action.title, action.direction);
+    case 'editor.closed':
+      return removeEditorPane(state, action.editorId);
     case 'pane.selected':
       return selectPane(state, action.terminalId);
     case 'pane.resized':
@@ -211,6 +217,43 @@ export function splitActivePane(
   };
 }
 
+export function splitEditorPane(state: TerminalState, editorId: string, title: string, direction: 'horizontal' | 'vertical'): TerminalState {
+  const activeWorkspace = getActiveWorkspace(state);
+  const activeTab = activeWorkspace ? getActiveTab(activeWorkspace) : undefined;
+  if (!activeWorkspace || !activeTab) {
+    return state;
+  }
+
+  const activeTerminalId = activeTab.activeTerminalId;
+  const nextRoot = replacePane(activeTab.root, activeTerminalId, {
+    type: 'split',
+    direction,
+    ratio: 0.5,
+    first: { type: 'pane', terminalId: activeTerminalId },
+    second: { type: 'editor', editorId, title }
+  });
+
+  return {
+    ...state,
+    workspaces: state.workspaces.map((workspace) =>
+      workspace.id === activeWorkspace.id
+        ? {
+            ...workspace,
+            tabs: workspace.tabs.map((tab) =>
+              tab.id === activeTab.id
+                ? {
+                    ...tab,
+                    root: nextRoot,
+                    activeTerminalId
+                  }
+                : tab
+            )
+          }
+        : workspace
+    )
+  };
+}
+
 export function closeActivePane(state: TerminalState): TerminalState {
   const activeWorkspace = getActiveWorkspace(state);
   const activeTab = activeWorkspace ? getActiveTab(activeWorkspace) : undefined;
@@ -343,14 +386,26 @@ export function listTabTerminalIds(tab: TerminalTabLayout): TerminalId[] {
   return collectTerminalIds(tab.root);
 }
 
+export function countTabPanes(tab: TerminalTabLayout): number {
+  return countLayoutPanes(tab.root);
+}
+
 export function listWorkspaceTerminalIds(workspace: TerminalWorkspaceLayout): TerminalId[] {
   return workspace.tabs.flatMap((tab) => collectTerminalIds(tab.root));
 }
 
 export function serializeWorkspaceState(state: TerminalState): SerializedWorkspaceState {
+  const workspaces = state.workspaces.map((workspace) => {
+    const tabs = workspace.tabs.flatMap((tab) => {
+      const root = pruneEditorPanes(tab.root);
+      return root ? [{ ...tab, root }] : [];
+    });
+    return normalizeWorkspaceActiveTab({ ...workspace, tabs });
+  });
+
   return {
-    activeWorkspaceId: state.activeWorkspaceId,
-    workspaces: state.workspaces
+    activeWorkspaceId: workspaces.some((workspace) => workspace.id === state.activeWorkspaceId) ? state.activeWorkspaceId : workspaces[0]?.id ?? null,
+    workspaces
   };
 }
 
@@ -421,6 +476,40 @@ function removeTerminalPane(state: TerminalState, terminalId: TerminalId): Termi
     workspaces,
     activeWorkspaceId: activeWorkspaceStillExists ? state.activeWorkspaceId : workspaces[0]?.id ?? null,
     terminals
+  };
+}
+
+function removeEditorPane(state: TerminalState, editorId: string): TerminalState {
+  const workspaces = state.workspaces.map((workspace) => {
+    const tabs: TerminalTabLayout[] = [];
+    for (const tab of workspace.tabs) {
+      const nextRoot = removeEditorLayoutPane(tab.root, editorId);
+      if (!nextRoot) {
+        continue;
+      }
+      const paneIds = collectTerminalIds(nextRoot);
+      const activeTerminalId = paneIds.includes(tab.activeTerminalId) ? tab.activeTerminalId : paneIds[0];
+      if (!activeTerminalId) {
+        continue;
+      }
+      tabs.push({
+        ...tab,
+        root: nextRoot,
+        activeTerminalId
+      });
+    }
+
+    return normalizeWorkspaceActiveTab({
+      ...workspace,
+      tabs
+    });
+  });
+
+  const activeWorkspaceStillExists = workspaces.some((workspace) => workspace.id === state.activeWorkspaceId);
+  return {
+    ...state,
+    workspaces,
+    activeWorkspaceId: activeWorkspaceStillExists ? state.activeWorkspaceId : workspaces[0]?.id ?? null
   };
 }
 
@@ -546,6 +635,9 @@ function replacePane(root: LayoutNode, terminalId: TerminalId, replacement: Layo
   if (root.type === 'pane') {
     return root.terminalId === terminalId ? replacement : root;
   }
+  if (root.type === 'editor') {
+    return root;
+  }
   return {
     ...root,
     first: replacePane(root.first, terminalId, replacement),
@@ -557,8 +649,26 @@ function removePane(root: LayoutNode, terminalId: TerminalId): LayoutNode | null
   if (root.type === 'pane') {
     return root.terminalId === terminalId ? null : root;
   }
+  if (root.type === 'editor') {
+    return root;
+  }
   const first = removePane(root.first, terminalId);
   const second = removePane(root.second, terminalId);
+  if (first && second) {
+    return { ...root, first, second };
+  }
+  return first ?? second;
+}
+
+function removeEditorLayoutPane(root: LayoutNode, editorId: string): LayoutNode | null {
+  if (root.type === 'editor') {
+    return root.editorId === editorId ? null : root;
+  }
+  if (root.type === 'pane') {
+    return root;
+  }
+  const first = removeEditorLayoutPane(root.first, editorId);
+  const second = removeEditorLayoutPane(root.second, editorId);
   if (first && second) {
     return { ...root, first, second };
   }
@@ -569,10 +679,28 @@ function pruneLayout(root: LayoutNode, availableIds: Set<TerminalId>): LayoutNod
   if (root.type === 'pane') {
     return availableIds.has(root.terminalId) ? root : null;
   }
+  if (root.type === 'editor') {
+    return null;
+  }
   const first = pruneLayout(root.first, availableIds);
   const second = pruneLayout(root.second, availableIds);
   if (first && second) {
     return { ...root, ratio: clampRatio(root.ratio), first, second };
+  }
+  return first ?? second;
+}
+
+function pruneEditorPanes(root: LayoutNode): LayoutNode | null {
+  if (root.type === 'editor') {
+    return null;
+  }
+  if (root.type === 'pane') {
+    return root;
+  }
+  const first = pruneEditorPanes(root.first);
+  const second = pruneEditorPanes(root.second);
+  if (first && second) {
+    return { ...root, first, second };
   }
   return first ?? second;
 }
@@ -611,6 +739,9 @@ function isLayoutNode(value: unknown): value is LayoutNode {
   if (node.type === 'pane') {
     return typeof node.terminalId === 'string';
   }
+  if (node.type === 'editor') {
+    return typeof node.editorId === 'string' && typeof node.title === 'string';
+  }
   if (node.type === 'split') {
     return (node.direction === 'horizontal' || node.direction === 'vertical') && isLayoutNode(node.first) && isLayoutNode(node.second);
   }
@@ -618,7 +749,7 @@ function isLayoutNode(value: unknown): value is LayoutNode {
 }
 
 function setRatioAtPath(root: LayoutNode, path: number[], ratio: number): LayoutNode {
-  if (root.type === 'pane') {
+  if (root.type === 'pane' || root.type === 'editor') {
     return root;
   }
   if (path.length === 0) {
@@ -644,6 +775,9 @@ function containsTerminal(root: LayoutNode, terminalId: TerminalId): boolean {
   if (root.type === 'pane') {
     return root.terminalId === terminalId;
   }
+  if (root.type === 'editor') {
+    return false;
+  }
   return containsTerminal(root.first, terminalId) || containsTerminal(root.second, terminalId);
 }
 
@@ -651,5 +785,15 @@ function collectTerminalIds(root: LayoutNode): TerminalId[] {
   if (root.type === 'pane') {
     return [root.terminalId];
   }
+  if (root.type === 'editor') {
+    return [];
+  }
   return [...collectTerminalIds(root.first), ...collectTerminalIds(root.second)];
+}
+
+function countLayoutPanes(root: LayoutNode): number {
+  if (root.type === 'pane' || root.type === 'editor') {
+    return 1;
+  }
+  return countLayoutPanes(root.first) + countLayoutPanes(root.second);
 }

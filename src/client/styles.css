@@ -55,7 +55,9 @@ body {
 }
 
 button,
-input {
+input,
+textarea,
+select {
   font: inherit;
 }
 
@@ -70,6 +72,12 @@ button:disabled {
 
 input {
   min-width: 0;
+  outline: none;
+}
+
+textarea {
+  min-width: 0;
+  resize: none;
   outline: none;
 }
 
@@ -176,6 +184,42 @@ input {
   display: grid;
   grid-template-rows: auto 1fr;
   min-height: 0;
+}
+
+.workspace-sidebar-content {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspace-sidebar-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  border-bottom: 1px solid var(--leo-line);
+  padding: 0 12px 10px;
+}
+
+.workspace-sidebar-tabs button {
+  height: 26px;
+  border: 1px solid var(--leo-line);
+  border-radius: 5px;
+  color: var(--leo-fg-3);
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.workspace-sidebar-tabs button:hover:not(:disabled) {
+  color: var(--leo-fg);
+  background: var(--leo-bg-2);
+}
+
+.workspace-sidebar-tabs button[aria-selected="true"] {
+  border-color: rgba(94, 234, 212, 0.55);
+  color: var(--leo-accent);
+  background: var(--leo-accent-soft);
 }
 
 .workspace-sidebar-header {
@@ -363,6 +407,305 @@ input {
 .workspace-sidebar-footer button {
   min-height: 0;
   color: var(--leo-fg-2);
+  font-size: 10.5px;
+}
+
+.file-explorer {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  color: var(--leo-fg-2);
+}
+
+.file-explorer-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--leo-line);
+  padding: 8px 10px 8px 12px;
+}
+
+.file-explorer-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--leo-fg-2);
+  font-family: var(--leo-font-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-explorer-toolbar,
+.file-detail-actions,
+.file-mode-actions,
+.file-save-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.file-explorer-toolbar button,
+.file-detail-actions button,
+.file-mode-actions button,
+.file-save-row button,
+.file-conflict button {
+  min-height: 24px;
+  border: 1px solid var(--leo-line-2);
+  border-radius: 5px;
+  padding: 0 8px;
+  color: var(--leo-fg-2);
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.file-explorer-toolbar button {
+  width: 24px;
+  padding: 0;
+}
+
+.file-explorer-toolbar button:hover:not(:disabled),
+.file-detail-actions button:hover:not(:disabled),
+.file-mode-actions button:hover:not(:disabled),
+.file-save-row button:hover:not(:disabled),
+.file-conflict button:hover:not(:disabled) {
+  border-color: rgba(94, 234, 212, 0.55);
+  color: var(--leo-fg);
+  background: var(--leo-accent-soft);
+}
+
+.file-explorer-alert,
+.file-conflict {
+  border-bottom: 1px solid rgba(248, 113, 113, 0.25);
+  padding: 7px 12px;
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.08);
+  font-size: 11px;
+}
+
+.file-conflict {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  border-radius: 6px;
+}
+
+.file-explorer-layout {
+  display: grid;
+  grid-template-rows: minmax(110px, 0.7fr) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.file-tree {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-bottom: 1px solid var(--leo-line);
+  padding: 6px 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.file-tree-children {
+  display: grid;
+}
+
+.file-entry-button {
+  display: grid;
+  grid-template-columns: 13px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-left: 2px solid transparent;
+  padding: 6px 12px 6px calc(10px + (var(--file-tree-depth, 0) * 14px));
+  color: var(--leo-fg-2);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.file-entry-button:hover:not(:disabled),
+.file-entry-button[data-active="true"] {
+  color: var(--leo-fg);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.file-entry-button[data-active="true"] {
+  border-left-color: var(--leo-accent);
+}
+
+.file-entry-button[data-kind="directory"][data-expanded="true"] {
+  background: rgba(94, 234, 212, 0.045);
+}
+
+.file-entry-button:disabled {
+  opacity: 0.44;
+}
+
+.file-entry-disclosure {
+  width: 13px;
+  color: var(--leo-fg-3);
+  font-family: var(--leo-font-mono);
+  font-size: 10px;
+  text-align: center;
+}
+
+.file-entry-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-entry-button small {
+  color: var(--leo-fg-3);
+  font-family: var(--leo-font-mono);
+  font-size: 10px;
+}
+
+.file-entry-button[data-kind="directory"] .file-entry-name {
+  color: var(--leo-accent);
+}
+
+.file-detail {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 10px 12px 12px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.file-detail-header,
+.file-save-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.file-detail-header strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--leo-fg);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-detail-actions {
+  flex: 0 0 auto;
+}
+
+.file-detail-empty {
+  display: grid;
+  min-height: 92px;
+  place-items: center;
+  color: var(--leo-fg-3);
+  font-family: var(--leo-font-mono);
+  font-size: 11px;
+}
+
+.file-preview-frame {
+  min-height: 180px;
+  overflow: auto;
+}
+
+.file-preview-frame img,
+.file-preview-frame iframe {
+  width: 100%;
+  min-height: 180px;
+  border: 1px solid var(--leo-line);
+  border-radius: 6px;
+  background: var(--leo-bg-2);
+}
+
+.file-preview-frame img {
+  height: auto;
+  object-fit: contain;
+}
+
+.file-markdown-panel,
+.file-editor-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.file-markdown-preview {
+  min-height: 180px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--leo-line);
+  border-radius: 6px;
+  padding: 10px;
+  color: var(--leo-fg);
+  background: var(--leo-bg-2);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-overflow-scrolling: touch;
+}
+
+.file-text-preview {
+  min-height: 180px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--leo-line);
+  border-radius: 6px;
+  padding: 10px;
+  color: var(--leo-fg);
+  background: var(--leo-bg-2);
+  font-family: var(--leo-font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-overflow-scrolling: touch;
+}
+
+.file-markdown-preview :first-child {
+  margin-top: 0;
+}
+
+.file-markdown-preview :last-child {
+  margin-bottom: 0;
+}
+
+.file-editor {
+  width: 100%;
+  min-height: 190px;
+  border: 1px solid var(--leo-line);
+  border-radius: 6px;
+  padding: 10px;
+  color: var(--leo-fg);
+  background: var(--leo-bg-2);
+  font-family: var(--leo-font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.file-editor:focus {
+  border-color: rgba(94, 234, 212, 0.55);
+  box-shadow: 0 0 0 2px var(--leo-accent-soft);
+}
+
+.file-save-row {
+  color: var(--leo-fg-3);
+  font-family: var(--leo-font-mono);
   font-size: 10.5px;
 }
 
@@ -798,8 +1141,108 @@ input {
 }
 
 .terminal-pane:hover .terminal-pane-close,
-.terminal-pane[data-active="true"] .terminal-pane-close {
+.terminal-pane[data-active="true"] .terminal-pane-close,
+.editor-pane:hover .terminal-pane-close {
   opacity: 1;
+}
+
+.editor-pane {
+  display: grid;
+  grid-template-rows: 28px auto auto minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--leo-bg);
+}
+
+.editor-pane-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border-bottom: 1px solid var(--leo-line);
+  padding: 0 10px;
+  color: var(--leo-fg-3);
+  font-family: var(--leo-font-mono);
+  font-size: 10.5px;
+}
+
+.editor-pane-header strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--leo-fg);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-pane-header button:not(.terminal-pane-close) {
+  min-height: 20px;
+  border: 1px solid var(--leo-line-2);
+  border-radius: 4px;
+  padding: 0 8px;
+  color: var(--leo-fg-2);
+  background: transparent;
+  font-size: 10.5px;
+}
+
+.editor-pane-header button:not(.terminal-pane-close):hover:not(:disabled) {
+  border-color: rgba(94, 234, 212, 0.55);
+  color: var(--leo-fg);
+  background: var(--leo-accent-soft);
+}
+
+.editor-pane-alert {
+  border-bottom: 1px solid rgba(248, 113, 113, 0.25);
+  padding: 7px 10px;
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.08);
+  font-size: 11px;
+}
+
+.editor-pane-textarea {
+  grid-row: 4;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  padding: 12px;
+  resize: none;
+  color: var(--leo-fg);
+  background: var(--leo-bg);
+  font-family: var(--leo-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  outline: none;
+}
+
+.editor-markdown-preview {
+  grid-row: 4;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 0;
+  padding: 14px 16px;
+  color: var(--leo-fg);
+  background: var(--leo-bg);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-overflow-scrolling: touch;
+}
+
+.editor-markdown-preview :first-child {
+  margin-top: 0;
+}
+
+.editor-markdown-preview :last-child {
+  margin-bottom: 0;
 }
 
 .xterm-container {

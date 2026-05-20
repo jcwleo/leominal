@@ -29,7 +29,13 @@ function testConfig(): AppConfig {
     cookieSecure: false,
     allowedOrigins: ['http://127.0.0.1:3107'],
     staticRoot: '/tmp/static',
-    isProduction: false
+    isProduction: false,
+    uploadMaxFiles: 1024,
+    uploadMaxFileBytes: 536_870_912,
+    uploadMaxBatchBytes: 2_147_483_648,
+    fileListMaxEntries: 2000,
+    fileTextMaxBytes: 1_048_576,
+    filePreviewMaxBytes: 52_428_800
   };
 }
 

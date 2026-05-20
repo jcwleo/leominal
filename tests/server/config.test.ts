@@ -61,6 +61,25 @@ describe('loadConfig', () => {
     expect(config.uploadMaxBatchBytes).toBe(8192);
   });
 
+  it('configures file explorer limits with safe defaults and environment overrides', () => {
+    const defaults = loadConfig(testEnv());
+    expect(defaults.fileListMaxEntries).toBe(2000);
+    expect(defaults.fileTextMaxBytes).toBe(1_048_576);
+    expect(defaults.filePreviewMaxBytes).toBe(52_428_800);
+
+    const config = loadConfig(
+      testEnv({
+        LEOMINAL_FILE_LIST_MAX_ENTRIES: '25',
+        LEOMINAL_FILE_TEXT_MAX_BYTES: '8192',
+        LEOMINAL_FILE_PREVIEW_MAX_BYTES: '65536'
+      })
+    );
+
+    expect(config.fileListMaxEntries).toBe(25);
+    expect(config.fileTextMaxBytes).toBe(8192);
+    expect(config.filePreviewMaxBytes).toBe(65_536);
+  });
+
   it('expands tilde workspace paths for local env files', () => {
     const config = loadConfig(
       testEnv({
@@ -77,6 +96,9 @@ describe('loadConfig', () => {
     expect(() => loadConfig(testEnv({ LEOMINAL_UPLOAD_MAX_FILES: '-1' }))).toThrow(/LEOMINAL_UPLOAD_MAX_FILES/);
     expect(() => loadConfig(testEnv({ LEOMINAL_UPLOAD_MAX_FILE_BYTES: '0' }))).toThrow(/LEOMINAL_UPLOAD_MAX_FILE_BYTES/);
     expect(() => loadConfig(testEnv({ LEOMINAL_UPLOAD_MAX_BATCH_BYTES: 'NaN' }))).toThrow(/LEOMINAL_UPLOAD_MAX_BATCH_BYTES/);
+    expect(() => loadConfig(testEnv({ LEOMINAL_FILE_LIST_MAX_ENTRIES: '0' }))).toThrow(/LEOMINAL_FILE_LIST_MAX_ENTRIES/);
+    expect(() => loadConfig(testEnv({ LEOMINAL_FILE_TEXT_MAX_BYTES: '-5' }))).toThrow(/LEOMINAL_FILE_TEXT_MAX_BYTES/);
+    expect(() => loadConfig(testEnv({ LEOMINAL_FILE_PREVIEW_MAX_BYTES: '1.5' }))).toThrow(/LEOMINAL_FILE_PREVIEW_MAX_BYTES/);
   });
 
   it('requires secrets outside test mode', () => {

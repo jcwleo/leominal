@@ -3,7 +3,17 @@ type TouchLikeEvent = Event & {
 };
 
 const mobileGestureEvents = ['gesturestart', 'gesturechange', 'gestureend'] as const;
-const nativeMobileScrollSelector = ['.workspace-list', '.terminal-tab-list', '.mobile-terminal-key-bar', '.upload-toast-body'].join(',');
+const nativeMobileScrollSelector = [
+  '.workspace-list',
+  '.terminal-tab-list',
+  '.mobile-terminal-key-bar',
+  '.upload-toast-body',
+  '.file-tree',
+  '.file-detail',
+  '.file-editor',
+  '.file-markdown-preview',
+  '.editor-markdown-preview'
+].join(',');
 
 export function installMobileZoomGuard(win: Window = window): () => void {
   if (!isTouchBrowser(win)) {

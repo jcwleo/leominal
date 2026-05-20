@@ -18,6 +18,7 @@ Leominal is not a hosted shell product, not a SaaS app, and not a multi-user acc
 - Supports multiple terminal tabs and split panes.
 - Reattaches to active PTYs after refresh or temporary WebSocket reconnects.
 - Uploads dropped files or folders into the active terminal pane's current working directory.
+- Browses and edits files under the active terminal pane's current working directory.
 - Stores a first-run password hash in a local state file.
 - Uses same-origin cookies and origin checks for mutating routes and terminal WebSockets.
 - Includes production-style local service commands.
@@ -54,6 +55,12 @@ For remote access, keep Leominal bound to `127.0.0.1` when possible and put a pr
 Drop files or folders onto the terminal workspace to upload them into the active pane's current working directory. Folder drops keep the dropped folder name and preserve internal paths. Existing files are not overwritten; Leominal writes a renamed copy such as `name 2.ext` or `folder 2` when a collision exists.
 
 Upload progress and partial failures appear in the bottom-right terminal popup. Successful files remain in place when another file in the same batch fails. Folder uploads depend on browser support for directory drag-and-drop; unsupported folder drops fail visibly instead of flattening the folder.
+
+## File Explorer
+
+Use the sidebar `files` tab to browse the active pane's current working directory. The explorer is scoped to that directory tree; it does not browse above the active cwd. Text and Markdown files can be viewed and edited, while browser-supported files such as images and PDFs can be previewed when they fit the configured limits.
+
+File operations run as the host account running Leominal. Deletes require confirmation, name conflicts fail closed instead of overwriting, and stale editor saves are rejected when the file changed after it was opened.
 
 ## Keyboard Shortcuts
 
@@ -147,6 +154,9 @@ LEOMINAL_COOKIE_SECURE=false
 LEOMINAL_UPLOAD_MAX_FILES=1024
 LEOMINAL_UPLOAD_MAX_FILE_BYTES=536870912
 LEOMINAL_UPLOAD_MAX_BATCH_BYTES=2147483648
+LEOMINAL_FILE_LIST_MAX_ENTRIES=2000
+LEOMINAL_FILE_TEXT_MAX_BYTES=1048576
+LEOMINAL_FILE_PREVIEW_MAX_BYTES=52428800
 ```
 
 Change these when needed:
@@ -159,6 +169,9 @@ Change these when needed:
 - `LEOMINAL_UPLOAD_MAX_FILES`: limit files accepted in one drag-and-drop upload.
 - `LEOMINAL_UPLOAD_MAX_FILE_BYTES`: limit each uploaded file in bytes.
 - `LEOMINAL_UPLOAD_MAX_BATCH_BYTES`: limit total bytes in one drag-and-drop upload.
+- `LEOMINAL_FILE_LIST_MAX_ENTRIES`: limit entries returned in one file explorer directory listing.
+- `LEOMINAL_FILE_TEXT_MAX_BYTES`: limit bytes loaded for text or Markdown view/edit.
+- `LEOMINAL_FILE_PREVIEW_MAX_BYTES`: limit bytes served for file previews such as images and PDFs.
 
 Example for an HTTPS reverse proxy:
 
@@ -187,6 +200,9 @@ Configuration comes from `.env` or process environment variables.
 | `LEOMINAL_UPLOAD_MAX_FILES` | `1024` | Maximum files accepted in one drag-and-drop upload. |
 | `LEOMINAL_UPLOAD_MAX_FILE_BYTES` | `536870912` | Maximum bytes accepted for one uploaded file. |
 | `LEOMINAL_UPLOAD_MAX_BATCH_BYTES` | `2147483648` | Maximum total bytes accepted for one upload batch. |
+| `LEOMINAL_FILE_LIST_MAX_ENTRIES` | `2000` | Maximum entries returned in one file explorer directory listing. |
+| `LEOMINAL_FILE_TEXT_MAX_BYTES` | `1048576` | Maximum bytes loaded for text or Markdown view/edit. |
+| `LEOMINAL_FILE_PREVIEW_MAX_BYTES` | `52428800` | Maximum bytes served for browser file previews. |
 | `LEOMINAL_PID_PATH` | `.leominal/leominal.pid` | PID file for the control script. |
 | `LEOMINAL_LOG_PATH` | `.leominal/leominal.log` | Log file for the control script. |
 

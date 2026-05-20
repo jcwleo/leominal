@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { isTerminalTabLayout, normalizeTerminalLayoutState } from '../../shared/layoutState.js';
+import type { FileOpenRequest } from '../../shared/protocol.js';
 import type { TerminalId, TerminalLayoutState, TerminalSummary, TerminalTabLayout, TerminalWorkspaceLayout } from '../../shared/types.js';
 import { ApiError, type ApiClient, createApiClient } from '../api/client.js';
+import type { TextEditorPaneModel } from '../files/TextEditorPane.js';
 import { uploadFiles } from '../api/uploadClient.js';
+import { FileExplorer } from '../files/FileExplorer.js';
 import { workspaceIndexShortcutLabel } from './keyboardShortcuts.js';
 import { LeominalMark } from './LeominalMark.js';
 import { SplitPane } from './SplitPane.js';
@@ -21,6 +24,7 @@ import {
   listWorkspaceTerminalIds,
   reconstructTerminalState,
   serializeWorkspaceState,
+  countTabPanes,
   type TerminalAction,
   terminalReducer
 } from './terminalReducer.js';
@@ -50,10 +54,13 @@ export function TerminalWorkspace({
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
+  const [sidebarMode, setSidebarMode] = useState<'workspaces' | 'files'>('workspaces');
+  const [editors, setEditors] = useState<Record<string, TextEditorPaneModel>>({});
   const [editingWorkspace, setEditingWorkspace] = useState<{ workspaceId: string; title: string } | null>(null);
   const workspaceEditInputRef = useRef<HTMLInputElement | null>(null);
   const workspaceRenameCancelledRef = useRef(false);
   const uploadIdRef = useRef(0);
+  const editorIdRef = useRef(0);
   const stateRef = useRef(state);
   const layoutRevisionRef = useRef<number | null>(null);
   const lastPersistedLayoutJsonRef = useRef<string | null>(null);
@@ -191,6 +198,36 @@ export function TerminalWorkspace({
       const response = await api.createTerminal(request);
       dispatchLayoutChange({ type: 'terminal.split', terminal: response.terminal, direction });
     });
+  }
+
+  async function openFileInEditorPane(request: FileOpenRequest) {
+    if (!activeTerminalId) {
+      throw new Error('No active pane is available.');
+    }
+
+    const read = await api.readFile(request);
+    const editorId = `editor-${Date.now().toString(36)}-${(editorIdRef.current += 1)}`;
+    const title = fileNameFromPath(read.path);
+    setEditors((current) => ({
+      ...current,
+      [editorId]: {
+        id: editorId,
+        title,
+        rootToken: request.rootToken,
+        path: read.path,
+        read
+      }
+    }));
+    dispatchLayoutChange({ type: 'editor.split', editorId, title, direction: 'vertical' });
+  }
+
+  function closeEditorPane(editorId: string) {
+    setEditors((current) => {
+      const next = { ...current };
+      delete next[editorId];
+      return next;
+    });
+    dispatchLayoutChange({ type: 'editor.closed', editorId });
   }
 
   async function closeTerminal(terminalId: TerminalId) {
@@ -474,6 +511,7 @@ export function TerminalWorkspace({
 
   const sessionLabel = formatSessionExpiry(sessionExpiresAt);
   const showSidebarDetails = !sidebarCollapsed || sidebarOpen;
+  const effectiveSidebarMode = showSidebarDetails ? sidebarMode : 'workspaces';
 
   return (
     <main
@@ -508,112 +546,145 @@ export function TerminalWorkspace({
             x
           </button>
         </header>
-        <nav className="workspace-nav" aria-label="Workspaces">
+        <div className="workspace-sidebar-content">
           {showSidebarDetails ? (
-            <div className="workspace-sidebar-header">
-              <span>workspaces</span>
-              <button type="button" aria-label="New workspace" title="New workspace" onClick={createNewWorkspace}>
-                +
+            <div className="workspace-sidebar-tabs" role="tablist" aria-label="Sidebar mode">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sidebarMode === 'workspaces'}
+                onClick={() => {
+                  setSidebarMode('workspaces');
+                  setEditingWorkspace(null);
+                }}
+              >
+                Workspaces
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sidebarMode === 'files'}
+                onClick={() => {
+                  setSidebarMode('files');
+                  setEditingWorkspace(null);
+                }}
+              >
+                Files
               </button>
             </div>
           ) : null}
-          <div className="workspace-list">
-            {state.workspaces.map((workspace, workspaceIndex) => {
-              const workspaceActiveTab = workspace.tabs.find((tab) => tab.id === workspace.activeTabId) ?? workspace.tabs[0];
-              const workspaceActiveTerminal = workspaceActiveTab ? state.terminals[workspaceActiveTab.activeTerminalId] : undefined;
-              const workspaceSummary = workspaceActiveTerminal?.cwd ?? `${workspace.tabs.length} tab${workspace.tabs.length === 1 ? '' : 's'}`;
-              const active = workspace.id === state.activeWorkspaceId;
-              const editing = editingWorkspace?.workspaceId === workspace.id && showSidebarDetails;
-              const workspaceInitial = (workspace.title.trim()[0] ?? '?').toUpperCase();
-              const workspaceShortcut = workspaceIndexShortcutLabel(workspaceIndex + 1);
-              const workspaceTitle = showSidebarDetails
-                ? `${workspace.title} - ${workspaceShortcut} - double-click to rename`
-                : `${workspace.title} - ${workspaceShortcut}`;
-              return (
-                <div
-                  className="workspace-entry"
-                  data-active={active}
-                  key={workspace.id}
-                >
-                  {editing ? (
-                    <form
-                      className="workspace-name-editor"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        commitRenameWorkspace();
-                      }}
+
+          {effectiveSidebarMode === 'workspaces' ? (
+            <nav className="workspace-nav" aria-label="Workspaces">
+              {showSidebarDetails ? (
+                <div className="workspace-sidebar-header">
+                  <span>workspaces</span>
+                  <button type="button" aria-label="New workspace" title="New workspace" onClick={createNewWorkspace}>
+                    +
+                  </button>
+                </div>
+              ) : null}
+              <div className="workspace-list">
+                {state.workspaces.map((workspace, workspaceIndex) => {
+                  const workspaceActiveTab = workspace.tabs.find((tab) => tab.id === workspace.activeTabId) ?? workspace.tabs[0];
+                  const workspaceActiveTerminal = workspaceActiveTab ? state.terminals[workspaceActiveTab.activeTerminalId] : undefined;
+                  const workspaceSummary = workspaceActiveTerminal?.cwd ?? `${workspace.tabs.length} tab${workspace.tabs.length === 1 ? '' : 's'}`;
+                  const active = workspace.id === state.activeWorkspaceId;
+                  const editing = editingWorkspace?.workspaceId === workspace.id && showSidebarDetails;
+                  const workspaceInitial = (workspace.title.trim()[0] ?? '?').toUpperCase();
+                  const workspaceShortcut = workspaceIndexShortcutLabel(workspaceIndex + 1);
+                  const workspaceTitle = showSidebarDetails
+                    ? `${workspace.title} - ${workspaceShortcut} - double-click to rename`
+                    : `${workspace.title} - ${workspaceShortcut}`;
+                  return (
+                    <div
+                      className="workspace-entry"
+                      data-active={active}
+                      key={workspace.id}
                     >
-                      <input
-                        ref={workspaceEditInputRef}
-                        aria-label={`Rename workspace ${workspace.title}`}
-                        value={editingWorkspace.title}
-                        onBlur={commitRenameWorkspace}
-                        onChange={(event) => setEditingWorkspace({ workspaceId: workspace.id, title: event.target.value })}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
+                      {editing ? (
+                        <form
+                          className="workspace-name-editor"
+                          onSubmit={(event) => {
                             event.preventDefault();
                             commitRenameWorkspace();
-                            return;
-                          }
-                          if (event.key === 'Escape') {
-                            event.preventDefault();
-                            workspaceRenameCancelledRef.current = true;
-                            setEditingWorkspace(null);
-                          }
-                        }}
-                      />
-                      <span className="workspace-entry-meta">
-                        <span className="workspace-entry-cwd">{workspaceSummary}</span>
-                        <span>{workspace.tabs.length}</span>
-                      </span>
-                    </form>
-                  ) : (
-                    <button
-                      type="button"
-                      className="workspace-select-button"
-                      aria-current={active ? 'page' : undefined}
-                      aria-label={!showSidebarDetails ? `Select workspace ${workspace.title}` : undefined}
-                      title={workspaceTitle}
-                      onClick={() => {
-                        dispatchLayoutChange({ type: 'workspace.selected', workspaceId: workspace.id });
-                        setSidebarOpen(false);
-                      }}
-                      onDoubleClick={(event) => {
-                        event.preventDefault();
-                        if (showSidebarDetails) {
-                          beginRenameWorkspace(workspace.id, workspace.title);
-                        }
-                      }}
-                    >
-                      {!showSidebarDetails ? (
-                        <span className="workspace-initial">{workspaceInitial}</span>
-                      ) : (
-                        <>
-                          <strong>{workspace.title}</strong>
+                          }}
+                        >
+                          <input
+                            ref={workspaceEditInputRef}
+                            aria-label={`Rename workspace ${workspace.title}`}
+                            value={editingWorkspace.title}
+                            onBlur={commitRenameWorkspace}
+                            onChange={(event) => setEditingWorkspace({ workspaceId: workspace.id, title: event.target.value })}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                commitRenameWorkspace();
+                                return;
+                              }
+                              if (event.key === 'Escape') {
+                                event.preventDefault();
+                                workspaceRenameCancelledRef.current = true;
+                                setEditingWorkspace(null);
+                              }
+                            }}
+                          />
                           <span className="workspace-entry-meta">
                             <span className="workspace-entry-cwd">{workspaceSummary}</span>
                             <span>{workspace.tabs.length}</span>
                           </span>
-                        </>
+                        </form>
+                      ) : (
+                        <button
+                          type="button"
+                          className="workspace-select-button"
+                          aria-current={active ? 'page' : undefined}
+                          aria-label={!showSidebarDetails ? `Select workspace ${workspace.title}` : undefined}
+                          title={workspaceTitle}
+                          onClick={() => {
+                            dispatchLayoutChange({ type: 'workspace.selected', workspaceId: workspace.id });
+                            setSidebarOpen(false);
+                          }}
+                          onDoubleClick={(event) => {
+                            event.preventDefault();
+                            if (showSidebarDetails) {
+                              beginRenameWorkspace(workspace.id, workspace.title);
+                            }
+                          }}
+                        >
+                          {!showSidebarDetails ? (
+                            <span className="workspace-initial">{workspaceInitial}</span>
+                          ) : (
+                            <>
+                              <strong>{workspace.title}</strong>
+                              <span className="workspace-entry-meta">
+                                <span className="workspace-entry-cwd">{workspaceSummary}</span>
+                                <span>{workspace.tabs.length}</span>
+                              </span>
+                            </>
+                          )}
+                        </button>
                       )}
-                    </button>
-                  )}
-                  {state.workspaces.length > 1 && showSidebarDetails ? (
-                    <button
-                      type="button"
-                      className="workspace-close-button"
-                      aria-label={`Close ${workspace.title}`}
-                      title={`Close ${workspace.title}`}
-                      onClick={() => void closeWorkspace(workspace.id)}
-                    >
-                      x
-                    </button>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        </nav>
+                      {state.workspaces.length > 1 && showSidebarDetails ? (
+                        <button
+                          type="button"
+                          className="workspace-close-button"
+                          aria-label={`Close ${workspace.title}`}
+                          title={`Close ${workspace.title}`}
+                          onClick={() => void closeWorkspace(workspace.id)}
+                        >
+                          x
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </nav>
+          ) : (
+            <FileExplorer api={api} activeTerminalId={activeTerminalId} onOpenFile={openFileInEditorPane} />
+          )}
+        </div>
         {showSidebarDetails ? (
           <div className="workspace-sidebar-footer">
             <span>{sessionLabel}</span>
@@ -648,9 +719,12 @@ export function TerminalWorkspace({
             <SplitPane
               node={activeTab.root}
               terminals={state.terminals}
+              editors={editors}
+              api={api}
               activeTerminalId={activeTab.activeTerminalId}
               onSelect={(terminalId) => dispatchLayoutChange({ type: 'pane.selected', terminalId })}
               onClose={(terminalId) => void closeTerminal(terminalId)}
+              onCloseEditor={closeEditorPane}
               onResize={(path, ratio) => dispatchLayoutChange({ type: 'pane.resized', path, ratio })}
               onExit={(terminalId, exitCode) => dispatchTerminalState({ type: 'terminal.exited', terminalId, exitCode })}
               onSnapshot={(terminal) => dispatchTerminalState({ type: 'terminal.updated', terminal })}
@@ -808,7 +882,7 @@ function StatusBar({
   tabCount: number;
   onReload: () => void;
 }) {
-  const paneCount = listTabTerminalIds(tab).length;
+  const paneCount = countTabPanes(tab);
   return (
     <footer className="terminal-status-bar">
       <span className="terminal-status-cwd">{activeTerminal?.cwd ?? '~'}</span>
@@ -900,6 +974,10 @@ function getActiveRunningTerminal(state: ReturnType<typeof createEmptyTerminalSt
 
 function firstUploadError(response: { results: Array<{ status: 'uploaded' | 'failed'; error?: string }> }): string | undefined {
   return response.results.find((result) => result.status === 'failed' && result.error)?.error;
+}
+
+function fileNameFromPath(filePath: string): string {
+  return filePath.split('/').filter(Boolean).pop() ?? filePath;
 }
 
 function readSidebarCollapsed(): boolean {

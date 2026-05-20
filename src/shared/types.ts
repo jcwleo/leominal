@@ -32,7 +32,13 @@ export interface PaneNode {
   terminalId: TerminalId;
 }
 
-export type LayoutNode = SplitNode | PaneNode;
+export interface EditorPaneNode {
+  type: 'editor';
+  editorId: string;
+  title: string;
+}
+
+export type LayoutNode = SplitNode | PaneNode | EditorPaneNode;
 
 export interface TerminalTabLayout {
   id: string;

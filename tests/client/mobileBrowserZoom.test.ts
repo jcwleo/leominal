@@ -66,4 +66,53 @@ describe('mobile browser zoom guard', () => {
     expect(document.dispatchEvent(oneFingerMove)).toBe(false);
     expect(oneFingerMove.defaultPrevented).toBe(true);
   });
+
+  it('allows single-touch scrolling inside the file explorer', async () => {
+    Object.defineProperty(Navigator.prototype, 'maxTouchPoints', {
+      configurable: true,
+      value: 1
+    });
+    document.body.innerHTML = '<div id="root"></div><div class="file-tree"><button type="button" id="file-row">notes.txt</button></div>';
+
+    await import('../../src/client/main.js');
+
+    const oneFingerMove = new Event('touchmove', { bubbles: true, cancelable: true });
+    Object.defineProperty(oneFingerMove, 'touches', {
+      configurable: true,
+      value: [{ identifier: 1 }]
+    });
+
+    const fileRow = document.getElementById('file-row');
+    if (!fileRow) {
+      throw new Error('file row fixture missing');
+    }
+
+    expect(fileRow.dispatchEvent(oneFingerMove)).toBe(true);
+    expect(oneFingerMove.defaultPrevented).toBe(false);
+  });
+
+  it('allows single-touch scrolling inside the embedded markdown preview', async () => {
+    Object.defineProperty(Navigator.prototype, 'maxTouchPoints', {
+      configurable: true,
+      value: 1
+    });
+    document.body.innerHTML =
+      '<div id="root"></div><div class="editor-markdown-preview"><h1 id="markdown-heading">Title</h1></div>';
+
+    await import('../../src/client/main.js');
+
+    const oneFingerMove = new Event('touchmove', { bubbles: true, cancelable: true });
+    Object.defineProperty(oneFingerMove, 'touches', {
+      configurable: true,
+      value: [{ identifier: 1 }]
+    });
+
+    const markdownHeading = document.getElementById('markdown-heading');
+    if (!markdownHeading) {
+      throw new Error('markdown heading fixture missing');
+    }
+
+    expect(markdownHeading.dispatchEvent(oneFingerMove)).toBe(true);
+    expect(oneFingerMove.defaultPrevented).toBe(false);
+  });
 });
