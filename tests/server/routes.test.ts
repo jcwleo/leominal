@@ -311,6 +311,7 @@ describe('terminal routes', () => {
     const { app, manager, adapter } = await buildTerminalTestApp(true);
     openApps.push(app);
     const terminal = await manager.createTerminal();
+    const refreshCwd = vi.spyOn(manager, 'refreshTerminalCwd');
     adapter.processes[0]!.emitData('boot');
     await app.listen({ host: '127.0.0.1', port: 0 });
     const address = app.server.address();
@@ -325,6 +326,7 @@ describe('terminal routes', () => {
     await waitForOpen(socket);
     const snapshot = await snapshotPromise;
     socket.send(JSON.stringify({ type: 'input', terminalId: terminal.id, data: 'pwd\r' }));
+    socket.send(JSON.stringify({ type: 'refresh_cwd', terminalId: terminal.id }));
     socket.send(JSON.stringify({ type: 'resize', terminalId: terminal.id, cols: 111, rows: 31 }));
     const terminalUpdate = await waitForMessage(socket);
     const outputPromise = waitForMessage(socket);
@@ -337,6 +339,7 @@ describe('terminal routes', () => {
     expect(snapshot).toMatchObject({ type: 'snapshot', output: ['boot'] });
     expect(terminalUpdate).toMatchObject({ type: 'terminal_updated', terminal: { id: terminal.id, cols: 111, rows: 31 } });
     expect(output).toEqual({ type: 'output', terminalId: terminal.id, data: 'live' });
+    expect(refreshCwd).toHaveBeenCalledWith(terminal.id);
     expect(adapter.processes[0]!.writes).toEqual(['pwd\r']);
     expect(adapter.processes[0]!.resizes).toEqual([{ cols: 111, rows: 31 }]);
     expect(adapter.processes[0]!.killed).toBe(false);

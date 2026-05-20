@@ -164,6 +164,7 @@ export interface FileDeleteResponse {
 
 export type ClientTerminalMessage =
   | { type: 'input'; terminalId: TerminalId; data: string }
+  | { type: 'refresh_cwd'; terminalId: TerminalId }
   | { type: 'resize'; terminalId: TerminalId; cols: number; rows: number }
   | { type: 'ping'; nonce: string };
 
@@ -183,6 +184,9 @@ export function parseClientTerminalMessage(raw: string): ClientTerminalMessage |
     }
     const message = parsed as Partial<ClientTerminalMessage>;
     if (message.type === 'input' && typeof message.terminalId === 'string' && typeof message.data === 'string') {
+      return message as ClientTerminalMessage;
+    }
+    if (message.type === 'refresh_cwd' && typeof message.terminalId === 'string') {
       return message as ClientTerminalMessage;
     }
     if (

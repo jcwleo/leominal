@@ -228,6 +228,48 @@ describe('TerminalManager', () => {
     ]);
   });
 
+  it('does not resolve cwd from PTY output alone', async () => {
+    const adapter = new FakePtyAdapter();
+    const resolveCwd = vi.fn(async () => '/workspace/root/packages/app');
+    const manager = new TerminalManager(testConfig(), adapter, { resolveCwd });
+    const terminal = await manager.createTerminal();
+    const messages: unknown[] = [];
+    manager.attachTerminal(terminal.id, (message) => messages.push(message), { replay: false });
+
+    adapter.processes[0]!.emitData('\r\n% ');
+
+    expect(resolveCwd).not.toHaveBeenCalled();
+    expect(messages).toEqual([{ type: 'output', terminalId: terminal.id, data: '\r\n% ' }]);
+    expect(manager.getTerminal(terminal.id)).toMatchObject({ cwd: '/workspace/root', title: 'root' });
+  });
+
+  it('publishes a terminal update when requested cwd refresh observes a cwd change', async () => {
+    const adapter = new FakePtyAdapter();
+    const resolveCwd = vi.fn(async () => '/workspace/root/packages/app');
+    const manager = new TerminalManager(testConfig(), adapter, { resolveCwd });
+    const terminal = await manager.createTerminal();
+    const messages: unknown[] = [];
+    manager.attachTerminal(terminal.id, (message) => messages.push(message), { replay: false });
+
+    await manager.refreshTerminalCwd(terminal.id);
+
+    expect(resolveCwd).toHaveBeenCalledWith(10_000);
+    expect(messages).toEqual([
+      {
+        type: 'terminal_updated',
+        terminal: expect.objectContaining({
+          id: terminal.id,
+          cwd: '/workspace/root/packages/app',
+          title: 'app'
+        })
+      }
+    ]);
+    expect(manager.getTerminal(terminal.id)).toMatchObject({
+      cwd: '/workspace/root/packages/app',
+      title: 'app'
+    });
+  });
+
   it('kills the PTY only on explicit close', async () => {
     const adapter = new FakePtyAdapter();
     const manager = new TerminalManager(testConfig(), adapter);

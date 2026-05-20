@@ -44,18 +44,22 @@ vi.mock('../../src/client/api/uploadClient.js', () => ({
 vi.mock('../../src/client/terminal/SplitPane.js', () => ({
   SplitPane: ({
     node,
+    terminals = {},
     editors = {},
     onClose,
     onCloseEditor,
     onResize,
-    onSelect
+    onSelect,
+    onSnapshot
   }: {
     node?: import('../../src/shared/types.js').LayoutNode;
+    terminals?: Record<string, TerminalSummary>;
     editors?: Record<string, { title: string; read: { content: string } }>;
     onClose?: (terminalId: string) => void;
     onCloseEditor?: (editorId: string) => void;
     onResize?: (path: number[], ratio: number) => void;
     onSelect?: (terminalId: string) => void;
+    onSnapshot?: (terminal: TerminalSummary) => void;
   }) => {
     function renderNode(layoutNode?: import('../../src/shared/types.js').LayoutNode): React.ReactNode {
       if (!layoutNode) {
@@ -94,6 +98,21 @@ vi.mock('../../src/client/terminal/SplitPane.js', () => ({
         </button>
         <button type="button" onClick={() => onSelect?.('term-alpha')}>
           Select pane term-alpha
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const terminal = terminals['term-alpha'];
+            if (terminal) {
+              onSnapshot?.({
+                ...terminal,
+                cwd: '/workspace/term-alpha-next',
+                updatedAt: '2026-05-20T00:00:01.000Z'
+              });
+            }
+          }}
+        >
+          Report pane term-alpha cwd
         </button>
       </div>
     );
@@ -338,6 +357,36 @@ describe('TerminalWorkspace', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Select pane term-alpha' }));
 
     await waitFor(() => expect(api.createFileRoot).toHaveBeenLastCalledWith({ terminalId: 'term-alpha' }));
+  });
+
+  it('refreshes the files root when the active pane cwd changes', async () => {
+    const api = createApi();
+    vi.mocked(api.createFileRoot)
+      .mockResolvedValueOnce({
+        rootToken: 'root-term-alpha-1',
+        terminalId: 'term-alpha',
+        rootPath: '/workspace/term-alpha',
+        issuedAt: '2026-05-20T00:00:00.000Z'
+      })
+      .mockResolvedValueOnce({
+        rootToken: 'root-term-alpha-2',
+        terminalId: 'term-alpha',
+        rootPath: '/workspace/term-alpha-next',
+        issuedAt: '2026-05-20T00:00:01.000Z'
+      });
+
+    render(<TerminalWorkspace api={api} />);
+
+    const sidebarTabs = await screen.findByRole('tablist', { name: 'Sidebar mode' });
+    fireEvent.click(within(sidebarTabs).getByRole('tab', { name: 'Files' }));
+
+    const files = await screen.findByRole('region', { name: 'Files' });
+    expect(await within(files).findByText('/workspace/term-alpha')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Report pane term-alpha cwd' }));
+
+    await waitFor(() => expect(api.createFileRoot).toHaveBeenCalledTimes(2));
+    expect(api.listFiles).toHaveBeenLastCalledWith({ rootToken: 'root-term-alpha-2', path: '' });
+    expect(await within(files).findByText('/workspace/term-alpha-next')).toBeVisible();
   });
 
   it('opens a file from the explorer in an embedded editor split pane', async () => {

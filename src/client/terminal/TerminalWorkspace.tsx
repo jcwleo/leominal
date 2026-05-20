@@ -71,6 +71,7 @@ export function TerminalWorkspace({
   const activeWorkspace = state.workspaces.find((workspace) => workspace.id === state.activeWorkspaceId) ?? state.workspaces[0];
   const activeTab = activeWorkspace?.tabs.find((tab) => tab.id === activeWorkspace.activeTabId) ?? activeWorkspace?.tabs[0];
   const activeTerminalId = activeTab?.activeTerminalId ?? null;
+  const activeTerminal = activeTerminalId ? state.terminals[activeTerminalId] : undefined;
   const [uploadToast, setUploadToast] = useState<UploadToastModel | null>(null);
 
   useEffect(() => {
@@ -682,7 +683,12 @@ export function TerminalWorkspace({
               </div>
             </nav>
           ) : (
-            <FileExplorer api={api} activeTerminalId={activeTerminalId} onOpenFile={openFileInEditorPane} />
+            <FileExplorer
+              api={api}
+              activeTerminalId={activeTerminalId}
+              activeTerminalCwd={activeTerminal?.cwd ?? null}
+              onOpenFile={openFileInEditorPane}
+            />
           )}
         </div>
         {showSidebarDetails ? (
@@ -722,6 +728,7 @@ export function TerminalWorkspace({
               editors={editors}
               api={api}
               activeTerminalId={activeTab.activeTerminalId}
+              refreshCwdOnEnter={effectiveSidebarMode === 'files'}
               onSelect={(terminalId) => dispatchLayoutChange({ type: 'pane.selected', terminalId })}
               onClose={(terminalId) => void closeTerminal(terminalId)}
               onCloseEditor={closeEditorPane}
@@ -733,7 +740,7 @@ export function TerminalWorkspace({
         </section>
         {activeWorkspace && activeTab ? (
           <StatusBar
-            activeTerminal={activeTerminalId ? state.terminals[activeTerminalId] : undefined}
+            activeTerminal={activeTerminal}
             tab={activeTab}
             tabCount={activeWorkspace.tabs.length}
             onReload={onReload}

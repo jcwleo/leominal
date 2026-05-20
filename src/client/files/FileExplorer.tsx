@@ -3,11 +3,12 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { FileEntry, FileListResponse, FileOpenRequest, FilePreviewKind, FileReadResponse } from '../../shared/protocol.js';
 import type { TerminalId } from '../../shared/types.js';
-import type { ApiClient } from '../api/client.js';
+import { ApiError, type ApiClient } from '../api/client.js';
 
 interface FileExplorerProps {
   api: ApiClient;
   activeTerminalId: TerminalId | null;
+  activeTerminalCwd: string | null;
   onOpenFile: (request: FileOpenRequest) => Promise<void>;
 }
 
@@ -18,7 +19,7 @@ type FileDetail =
 
 type FileStatus = 'idle' | 'loading';
 
-export function FileExplorer({ api, activeTerminalId, onOpenFile }: FileExplorerProps) {
+export function FileExplorer({ api, activeTerminalId, activeTerminalCwd, onOpenFile }: FileExplorerProps) {
   const [root, setRoot] = useState<{ rootToken: string; rootPath: string } | null>(null);
   const [currentPath, setCurrentPath] = useState('');
   const [entriesByPath, setEntriesByPath] = useState<Record<string, FileEntry[]>>({});
@@ -28,10 +29,11 @@ export function FileExplorer({ api, activeTerminalId, onOpenFile }: FileExplorer
   const [status, setStatus] = useState<FileStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const previewUrlRef = useRef<string | null>(null);
-  const loadedTerminalIdRef = useRef<TerminalId | null>(null);
+  const loadedRootKeyRef = useRef<string | null>(null);
   const mountedRef = useRef(false);
   const requestIdRef = useRef(0);
 
+  const activeRootKey = activeTerminalId ? rootKey(activeTerminalId, activeTerminalCwd) : null;
   const displayPath = root ? [root.rootPath, currentPath].filter(Boolean).join('/') : '';
   const selectedEntryPath = selectedEntry?.path ?? null;
 
@@ -45,15 +47,15 @@ export function FileExplorer({ api, activeTerminalId, onOpenFile }: FileExplorer
   }, []);
 
   useEffect(() => {
-    if (activeTerminalId === loadedTerminalIdRef.current) {
+    if (activeRootKey === loadedRootKeyRef.current) {
       return;
     }
-    void loadTerminalRoot(activeTerminalId);
-  }, [activeTerminalId, api]);
+    void loadTerminalRoot(activeTerminalId, activeRootKey);
+  }, [activeRootKey, activeTerminalId, api]);
 
-  async function loadTerminalRoot(terminalId: TerminalId | null) {
+  async function loadTerminalRoot(terminalId: TerminalId | null, nextRootKey = activeRootKey) {
     const requestId = beginRequest();
-    loadedTerminalIdRef.current = terminalId;
+    loadedRootKeyRef.current = nextRootKey;
     clearPreviewUrl();
     setRoot(null);
     setCurrentPath('');
@@ -82,6 +84,9 @@ export function FileExplorer({ api, activeTerminalId, onOpenFile }: FileExplorer
       applyList(listed);
       setStatus('idle');
     } catch (caught) {
+      if (await recoverFromStaleRoot(caught, requestId)) {
+        return;
+      }
       if (isCurrentRequest(requestId)) {
         setError(errorMessage(caught));
         setStatus('idle');
@@ -104,6 +109,9 @@ export function FileExplorer({ api, activeTerminalId, onOpenFile }: FileExplorer
       applyList(listed);
       setStatus('idle');
     } catch (caught) {
+      if (await recoverFromStaleRoot(caught, requestId)) {
+        return;
+      }
       if (isCurrentRequest(requestId)) {
         setError(errorMessage(caught));
         setStatus('idle');
@@ -112,7 +120,7 @@ export function FileExplorer({ api, activeTerminalId, onOpenFile }: FileExplorer
   }
 
   async function refreshActiveRoot() {
-    await loadTerminalRoot(activeTerminalId);
+    await loadTerminalRoot(activeTerminalId, activeRootKey);
   }
 
   function applyList(listed: FileListResponse) {
@@ -214,6 +222,9 @@ export function FileExplorer({ api, activeTerminalId, onOpenFile }: FileExplorer
       setDetail({ type: 'text-preview', file, read });
       setStatus('idle');
     } catch (caught) {
+      if (await recoverFromStaleRoot(caught, requestId)) {
+        return;
+      }
       if (isCurrentRequest(requestId)) {
         setError(errorMessage(caught));
         setStatus('idle');
@@ -234,6 +245,9 @@ export function FileExplorer({ api, activeTerminalId, onOpenFile }: FileExplorer
         setStatus('idle');
       }
     } catch (caught) {
+      if (await recoverFromStaleRoot(caught, requestId)) {
+        return;
+      }
       if (isCurrentRequest(requestId)) {
         setError(errorMessage(caught));
         setStatus('idle');
@@ -263,6 +277,9 @@ export function FileExplorer({ api, activeTerminalId, onOpenFile }: FileExplorer
       setDetail({ type: 'preview', file, previewKind, url });
       setStatus('idle');
     } catch (caught) {
+      if (await recoverFromStaleRoot(caught, requestId)) {
+        return;
+      }
       if (isCurrentRequest(requestId)) {
         setError(errorMessage(caught));
         setStatus('idle');
@@ -287,6 +304,9 @@ export function FileExplorer({ api, activeTerminalId, onOpenFile }: FileExplorer
       setSelectedEntry(response.entry);
       await refreshDirectory(directoryPath);
     } catch (caught) {
+      if (await recoverFromStaleRoot(caught)) {
+        return;
+      }
       setError(errorMessage(caught));
     }
   }
@@ -317,6 +337,9 @@ export function FileExplorer({ api, activeTerminalId, onOpenFile }: FileExplorer
         await refreshDirectory(destinationParentPath);
       }
     } catch (caught) {
+      if (await recoverFromStaleRoot(caught)) {
+        return;
+      }
       setError(errorMessage(caught));
     }
   }
@@ -349,6 +372,9 @@ export function FileExplorer({ api, activeTerminalId, onOpenFile }: FileExplorer
       clearDetail();
       await refreshDirectory(deletedParentPath);
     } catch (caught) {
+      if (await recoverFromStaleRoot(caught)) {
+        return;
+      }
       setError(errorMessage(caught));
     }
   }
@@ -373,6 +399,17 @@ export function FileExplorer({ api, activeTerminalId, onOpenFile }: FileExplorer
 
   function isCurrentRequest(requestId: number): boolean {
     return mountedRef.current && requestId === requestIdRef.current;
+  }
+
+  async function recoverFromStaleRoot(caught: unknown, requestId?: number): Promise<boolean> {
+    if (!isTerminalCwdChanged(caught)) {
+      return false;
+    }
+    if (requestId !== undefined && !isCurrentRequest(requestId)) {
+      return true;
+    }
+    await loadTerminalRoot(activeTerminalId, activeRootKey);
+    return true;
   }
 
   function renderTreeEntry(file: FileEntry, depth: number): React.ReactNode {
@@ -504,6 +541,10 @@ function entryBadge(entry: FileEntry): string {
   return 'unsupported';
 }
 
+function rootKey(terminalId: TerminalId, cwd: string | null): string {
+  return `${terminalId}\0${cwd ?? ''}`;
+}
+
 function sortEntries(entries: FileEntry[]): FileEntry[] {
   return [...entries].sort((left, right) => {
     if (left.kind === 'directory' && right.kind !== 'directory') {
@@ -538,4 +579,8 @@ function normalizePromptPath(value: string | null, currentPath: string): string 
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Request failed';
+}
+
+function isTerminalCwdChanged(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409 && error.message === 'terminal_cwd_changed';
 }

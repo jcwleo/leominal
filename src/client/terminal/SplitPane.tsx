@@ -10,6 +10,7 @@ interface SplitPaneProps {
   editors: Record<string, TextEditorPaneModel>;
   api: ApiClient;
   activeTerminalId: TerminalId;
+  refreshCwdOnEnter?: boolean;
   path?: number[];
   totalPanes?: number;
   onSelect: (terminalId: TerminalId) => void;
@@ -26,6 +27,7 @@ export function SplitPane({
   editors,
   api,
   activeTerminalId,
+  refreshCwdOnEnter = false,
   path = [],
   totalPanes,
   onSelect,
@@ -47,6 +49,7 @@ export function SplitPane({
         terminal={terminal}
         active={node.terminalId === activeTerminalId}
         canClose={paneCount > 1}
+        refreshCwdOnEnter={refreshCwdOnEnter && node.terminalId === activeTerminalId}
         onSelect={() => onSelect(node.terminalId)}
         onClose={() => onClose(node.terminalId)}
         onExit={(exitCode) => onExit(node.terminalId, exitCode)}
@@ -79,6 +82,7 @@ export function SplitPane({
           editors={editors}
           api={api}
           activeTerminalId={activeTerminalId}
+          refreshCwdOnEnter={refreshCwdOnEnter}
           path={[...path, 0]}
           totalPanes={paneCount}
           onSelect={onSelect}
@@ -97,6 +101,7 @@ export function SplitPane({
           editors={editors}
           api={api}
           activeTerminalId={activeTerminalId}
+          refreshCwdOnEnter={refreshCwdOnEnter}
           path={[...path, 1]}
           totalPanes={paneCount}
           onSelect={onSelect}

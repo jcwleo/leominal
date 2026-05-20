@@ -127,6 +127,15 @@ export class TerminalManager {
     return this.safeResolveCwd(record.pty.pid);
   }
 
+  async refreshTerminalCwd(id: TerminalId): Promise<TerminalSummary | null> {
+    const record = this.terminals.get(id);
+    if (!record?.pty || record.summary.status !== 'running') {
+      return null;
+    }
+    await this.refreshCwd(record);
+    return cloneSummary(record.summary);
+  }
+
   attachTerminal(id: TerminalId, subscriber: TerminalSubscriber, options: AttachTerminalOptions = {}): TerminalAttachment | null {
     const record = this.terminals.get(id);
     if (!record) {
@@ -214,6 +223,23 @@ export class TerminalManager {
     } catch {
       return null;
     }
+  }
+
+  private async refreshCwd(record: TerminalRecord): Promise<void> {
+    const pty = record.pty;
+    if (!pty || record.summary.status !== 'running') {
+      return;
+    }
+
+    const cwd = await this.safeResolveCwd(pty.pid);
+    if (!cwd || record.pty !== pty || record.summary.status !== 'running' || cwd === record.summary.cwd) {
+      return;
+    }
+
+    record.summary.cwd = cwd;
+    record.summary.title = this.createTitle(cwd);
+    record.summary.updatedAt = this.timestamp();
+    this.publish(record, { type: 'terminal_updated', terminal: cloneSummary(record.summary) });
   }
 
   private publish(record: TerminalRecord, message: ServerTerminalMessage): void {

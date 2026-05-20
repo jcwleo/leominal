@@ -12,19 +12,21 @@ import { installTerminalClipboard } from './terminalClipboard.js';
 import { installInactiveTerminalReportGuards } from './terminalReportGuards.js';
 
 const terminalFitSettleDelaysMs = [0, 50, 150, 350] as const;
+const cwdRefreshDelaysMs = [300, 1_200, 2_500] as const;
 const touchScrollLineHeight = terminalFontSize * 1.2;
 
 interface XtermPaneProps {
   terminal: TerminalSummary;
   active: boolean;
   canClose: boolean;
+  refreshCwdOnEnter?: boolean;
   onSelect: () => void;
   onClose: () => void;
   onExit: (exitCode: number | null) => void;
   onSnapshot: (terminal: TerminalSummary) => void;
 }
 
-export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExit, onSnapshot }: XtermPaneProps) {
+export function XtermPane({ terminal, active, canClose, refreshCwdOnEnter = false, onSelect, onClose, onExit, onSnapshot }: XtermPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -33,14 +35,20 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
   const reconnectEnabledRef = useRef(terminal.status === 'running');
   const lastReportedSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const pendingFitTimersRef = useRef<Map<number, number>>(new Map());
+  const cwdRefreshTimerRefs = useRef<number[]>([]);
   const ctrlModifierArmedRef = useRef(false);
   const activeRef = useRef(active);
+  const refreshCwdOnEnterRef = useRef(refreshCwdOnEnter);
   const [, setConnectionStatus] = useState<'connecting' | 'connected' | 'reconnecting' | 'closed'>('connecting');
   const [ctrlModifierArmed, setCtrlModifierArmed] = useState(false);
 
   useLayoutEffect(() => {
     activeRef.current = active;
   }, [active]);
+
+  useLayoutEffect(() => {
+    refreshCwdOnEnterRef.current = refreshCwdOnEnter;
+  }, [refreshCwdOnEnter]);
 
   useEffect(() => {
     if (active && terminal.status === 'running') {
@@ -120,13 +128,13 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
           setCtrlModifier(false);
           const modifiedData = ctrlModifiedData(data);
           if (modifiedData) {
-            sendSocketMessage({ type: 'input', terminalId: terminal.id, data: modifiedData });
+            sendTerminalInput(modifiedData);
             return;
           }
         }
         const composedData = inputComposer.accept(data);
         if (composedData) {
-          sendSocketMessage({ type: 'input', terminalId: terminal.id, data: composedData });
+          sendTerminalInput(composedData);
         }
       });
 
@@ -140,6 +148,7 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
     return () => {
       disposed = true;
       clearScheduledFit();
+      clearScheduledCwdRefresh();
       removeTouchScroll?.();
       resizeObserver?.disconnect();
       clipboardDisposable?.dispose();
@@ -312,6 +321,13 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
     pendingFitTimersRef.current.clear();
   }
 
+  function clearScheduledCwdRefresh() {
+    for (const timer of cwdRefreshTimerRefs.current) {
+      window.clearTimeout(timer);
+    }
+    cwdRefreshTimerRefs.current = [];
+  }
+
   function fitAndReportSize() {
     const xterm = xtermRef.current;
     const fit = fitRef.current;
@@ -346,6 +362,28 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
     return false;
   }
 
+  function sendTerminalInput(data: string) {
+    if (sendSocketMessage({ type: 'input', terminalId: terminal.id, data }) && isEnterInput(data)) {
+      scheduleCwdRefresh();
+    }
+  }
+
+  function scheduleCwdRefresh() {
+    if (!refreshCwdOnEnterRef.current || !activeRef.current) {
+      return;
+    }
+    clearScheduledCwdRefresh();
+    cwdRefreshTimerRefs.current = cwdRefreshDelaysMs.map((delay) => {
+      const timer = window.setTimeout(() => {
+        cwdRefreshTimerRefs.current = cwdRefreshTimerRefs.current.filter((candidate) => candidate !== timer);
+        if (refreshCwdOnEnterRef.current && activeRef.current) {
+          sendSocketMessage({ type: 'refresh_cwd', terminalId: terminal.id });
+        }
+      }, delay);
+      return timer;
+    });
+  }
+
   function focusTerminal() {
     xtermRef.current?.focus();
   }
@@ -361,7 +399,7 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
   }
 
   function sendStandaloneKey(key: MobileTerminalStandaloneKey) {
-    sendSocketMessage({ type: 'input', terminalId: terminal.id, data: terminalKeySequence(key) });
+    sendTerminalInput(terminalKeySequence(key));
     focusTerminal();
   }
 
@@ -411,6 +449,10 @@ export function XtermPane({ terminal, active, canClose, onSelect, onClose, onExi
       ) : null}
     </section>
   );
+}
+
+function isEnterInput(data: string): boolean {
+  return data.includes('\r') || data.includes('\n');
 }
 
 function installTerminalTouchScroll(container: HTMLElement, xterm: Terminal): () => void {

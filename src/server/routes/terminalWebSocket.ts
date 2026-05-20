@@ -4,6 +4,7 @@ import { isAllowedOrigin, type AppConfig } from '../config.js';
 import type { AuthService } from '../auth/authService.js';
 import type { TerminalManager } from '../terminal/TerminalManager.js';
 import { parseClientTerminalMessage } from '../../shared/protocol.js';
+import type { ServerTerminalMessage } from '../../shared/protocol.js';
 import { authenticateTerminalRequest } from './terminalRoutes.js';
 
 export interface TerminalWebSocketServices {
@@ -32,9 +33,15 @@ export async function registerTerminalWebSocket(
     }
 
     const terminalId = request.params.id;
+    let snapshotSent = false;
+    const pendingMessages: ServerTerminalMessage[] = [];
     const attachment = services.terminalManager.attachTerminal(
       terminalId,
       (message) => {
+        if (!snapshotSent) {
+          pendingMessages.push(message);
+          return;
+        }
         sendJson(socket, message);
       },
       { replay: false }
@@ -46,6 +53,11 @@ export async function registerTerminalWebSocket(
     }
 
     sendJson(socket, { type: 'snapshot', terminal: attachment.terminal, output: attachment.output });
+    snapshotSent = true;
+    for (const message of pendingMessages) {
+      sendJson(socket, message);
+    }
+    pendingMessages.length = 0;
 
     let isAlive = true;
     const heartbeat = setInterval(() => {
@@ -76,6 +88,10 @@ export async function registerTerminalWebSocket(
       }
       if (message.terminalId !== terminalId) {
         sendJson(socket, { type: 'error', message: 'terminal id mismatch' });
+        return;
+      }
+      if (message.type === 'refresh_cwd') {
+        void services.terminalManager.refreshTerminalCwd(message.terminalId);
         return;
       }
       if (message.type === 'input') {

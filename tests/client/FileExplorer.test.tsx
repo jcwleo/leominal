@@ -24,7 +24,7 @@ import type {
   FileWriteRequest,
   FileWriteResponse
 } from '../../src/shared/protocol.js';
-import type { ApiClient } from '../../src/client/api/client.js';
+import { ApiError, type ApiClient } from '../../src/client/api/client.js';
 import { FileExplorer } from '../../src/client/files/FileExplorer.js';
 
 const version: FileVersion = { size: 12, mtimeMs: 1_779_000_000_000, ino: 7 };
@@ -95,9 +95,17 @@ function createFileApi() {
 
 function renderExplorer(
   api: ApiClient,
-  onOpenFile = vi.fn(async (_request: FileOpenRequest): Promise<void> => undefined)
+  onOpenFile = vi.fn(async (_request: FileOpenRequest): Promise<void> => undefined),
+  activeTerminalCwd = '/workspace/term-alpha'
 ) {
-  const rendered = render(<FileExplorer api={api} activeTerminalId="term-alpha" onOpenFile={onOpenFile} />);
+  const rendered = render(
+    <FileExplorer
+      api={api}
+      activeTerminalId="term-alpha"
+      activeTerminalCwd={activeTerminalCwd}
+      onOpenFile={onOpenFile}
+    />
+  );
   return { ...rendered, onOpenFile };
 }
 
@@ -353,6 +361,33 @@ describe('FileExplorer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh files' }));
 
     await waitFor(() => expect(api.createFileRoot).toHaveBeenCalledTimes(2));
+    expect(api.listFiles).toHaveBeenLastCalledWith({ rootToken: 'root-alpha-2', path: '' });
+    expect(await screen.findByText('/workspace/term-alpha-next')).toBeVisible();
+  });
+
+  it('refreshes the active root instead of showing an error when a stale root is used', async () => {
+    const { api } = createFileApi();
+    vi.mocked(api.createFileRoot)
+      .mockResolvedValueOnce({
+        rootToken: 'root-alpha-1',
+        terminalId: 'term-alpha',
+        rootPath: '/workspace/term-alpha',
+        issuedAt: '2026-05-20T00:00:00.000Z'
+      })
+      .mockResolvedValueOnce({
+        rootToken: 'root-alpha-2',
+        terminalId: 'term-alpha',
+        rootPath: '/workspace/term-alpha-next',
+        issuedAt: '2026-05-20T00:00:01.000Z'
+      });
+    vi.mocked(api.readFile).mockRejectedValueOnce(new ApiError(409, 'terminal_cwd_changed'));
+
+    renderExplorer(api);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open file notes.txt' }));
+
+    await waitFor(() => expect(api.createFileRoot).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(api.listFiles).toHaveBeenLastCalledWith({ rootToken: 'root-alpha-2', path: '' });
     expect(await screen.findByText('/workspace/term-alpha-next')).toBeVisible();
   });

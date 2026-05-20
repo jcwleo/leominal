@@ -212,6 +212,14 @@ function inputMessages(socket: MockWebSocket[]) {
   );
 }
 
+function refreshCwdMessages(socket: MockWebSocket[]) {
+  return socket.flatMap((candidate) =>
+    candidate.sent
+      .map((message) => JSON.parse(message) as { type?: string; terminalId?: string })
+      .filter((message) => message.type === 'refresh_cwd')
+  );
+}
+
 async function openSocketAfterXtermReady(): Promise<MockWebSocket> {
   await waitFor(() => expect(xtermMocks.terminals[0]?.open).toHaveBeenCalled());
   const socket = sockets[0];
@@ -243,6 +251,7 @@ describe('XtermPane', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     cleanup();
     vi.unstubAllGlobals();
   });
@@ -547,6 +556,48 @@ describe('XtermPane', () => {
       { type: 'input', terminalId: 'term-alpha', data: 'c' }
     ]);
     await waitFor(() => expect(ctrlButton).toHaveAttribute('aria-pressed', 'false'));
+  });
+
+  it('requests follow-up cwd refreshes after Enter only when enabled', async () => {
+    renderPane({ refreshCwdOnEnter: true });
+    const socket = await openSocketAfterXtermReady();
+
+    vi.useFakeTimers();
+    xtermMocks.terminals[0]?.dataHandler?.('cd /tmp');
+    xtermMocks.terminals[0]?.dataHandler?.('\r');
+
+    expect(inputMessages([socket])).toEqual([
+      { type: 'input', terminalId: 'term-alpha', data: 'cd /tmp' },
+      { type: 'input', terminalId: 'term-alpha', data: '\r' }
+    ]);
+    expect(refreshCwdMessages([socket])).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(300);
+    expect(refreshCwdMessages([socket])).toEqual([{ type: 'refresh_cwd', terminalId: 'term-alpha' }]);
+
+    await vi.advanceTimersByTimeAsync(900);
+    expect(refreshCwdMessages([socket])).toEqual([
+      { type: 'refresh_cwd', terminalId: 'term-alpha' },
+      { type: 'refresh_cwd', terminalId: 'term-alpha' }
+    ]);
+
+    await vi.advanceTimersByTimeAsync(1_300);
+    expect(refreshCwdMessages([socket])).toEqual([
+      { type: 'refresh_cwd', terminalId: 'term-alpha' },
+      { type: 'refresh_cwd', terminalId: 'term-alpha' },
+      { type: 'refresh_cwd', terminalId: 'term-alpha' }
+    ]);
+    vi.useRealTimers();
+  });
+
+  it('does not request cwd refresh after Enter when disabled', async () => {
+    renderPane({ refreshCwdOnEnter: false });
+    const socket = await openSocketAfterXtermReady();
+
+    xtermMocks.terminals[0]?.dataHandler?.('\r');
+    await new Promise((resolve) => window.setTimeout(resolve, 450));
+
+    expect(refreshCwdMessages([socket])).toEqual([]);
   });
 
   it('maps one-finger terminal drags to xterm scrollback without page panning', async () => {
