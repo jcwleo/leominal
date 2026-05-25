@@ -12,7 +12,7 @@ import { loadConfig } from '../../src/server/config.js';
 import type { AppConfig } from '../../src/server/config.js';
 import { buildApp } from '../../src/server/http.js';
 import { registerTerminalRoutes } from '../../src/server/routes/terminalRoutes.js';
-import { registerTerminalWebSocket } from '../../src/server/routes/terminalWebSocket.js';
+import { TerminalSocketSender, registerTerminalWebSocket } from '../../src/server/routes/terminalWebSocket.js';
 import { FileStore } from '../../src/server/storage/fileStore.js';
 import type { PtyAdapter, PtyExit, PtyProcess, PtySpawnOptions, Disposable } from '../../src/server/terminal/PtyAdapter.js';
 import { TerminalManager } from '../../src/server/terminal/TerminalManager.js';
@@ -125,6 +125,10 @@ function waitForMessage(socket: WebSocket): Promise<unknown> {
   });
 }
 
+function waitForNextTick(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 function waitForClose(socket: WebSocket): Promise<{ code: number; reason: string }> {
   return new Promise((resolve) => {
     socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() }));
@@ -218,6 +222,53 @@ function terminalLayout(tabTitle = 'Shell'): TerminalLayoutState {
     ]
   };
 }
+
+class FakeTerminalSocket {
+  readyState = WebSocket.OPEN;
+  bufferedAmount = 0;
+  readonly sent: string[] = [];
+  readonly closes: Array<{ code: number | undefined; reason: string | undefined }> = [];
+
+  send(data: string): void {
+    this.sent.push(data);
+  }
+
+  close(code?: number, reason?: string): void {
+    this.readyState = WebSocket.CLOSING;
+    this.closes.push({ code, reason });
+  }
+}
+
+function manualFlushScheduler(): { schedule: (callback: () => void) => () => void; flush: () => void } {
+  let pending: (() => void) | null = null;
+  return {
+    schedule(callback) {
+      pending = callback;
+      return () => {
+        pending = null;
+      };
+    },
+    flush() {
+      pending?.();
+      pending = null;
+    }
+  };
+}
+
+describe('TerminalSocketSender', () => {
+  it('closes slow clients instead of queueing more output when the socket buffer is already high', () => {
+    const scheduler = manualFlushScheduler();
+    const socket = new FakeTerminalSocket();
+    socket.bufferedAmount = 16 * 1024 * 1024 + 1;
+    const sender = new TerminalSocketSender(socket as unknown as WebSocket, scheduler.schedule);
+
+    sender.send({ type: 'output', terminalId: 'terminal-1', data: 'payload' });
+    scheduler.flush();
+
+    expect(socket.sent).toEqual([]);
+    expect(socket.closes).toEqual([{ code: 1013, reason: 'client too slow' }]);
+  });
+});
 
 describe('terminal routes', () => {
   let openApps: FastifyInstance[] = [];
@@ -343,6 +394,36 @@ describe('terminal routes', () => {
     expect(adapter.processes[0]!.writes).toEqual(['pwd\r']);
     expect(adapter.processes[0]!.resizes).toEqual([{ cols: 111, rows: 31 }]);
     expect(adapter.processes[0]!.killed).toBe(false);
+  });
+
+  it('coalesces same-tick terminal output before sending it over WebSocket', async () => {
+    const { app, manager, adapter } = await buildTerminalTestApp(true);
+    openApps.push(app);
+    const terminal = await manager.createTerminal();
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('missing app address');
+    }
+
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/terminals/${terminal.id}/ws`, {
+      headers: { 'x-test-auth': 'yes', origin: 'http://127.0.0.1:3107' }
+    });
+    const snapshotPromise = waitForMessage(socket);
+    await waitForOpen(socket);
+    await snapshotPromise;
+
+    const messages: unknown[] = [];
+    socket.on('message', (data) => messages.push(JSON.parse(data.toString())));
+    adapter.processes[0]!.emitData('one');
+    adapter.processes[0]!.emitData('two');
+    adapter.processes[0]!.emitData('three');
+    await waitForNextTick();
+    const closePromise = waitForClose(socket);
+    socket.close();
+    await closePromise;
+
+    expect(messages).toEqual([{ type: 'output', terminalId: terminal.id, data: 'onetwothree' }]);
   });
 
   it('rejects authenticated terminal WebSockets from disallowed origins', async () => {

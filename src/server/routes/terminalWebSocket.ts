@@ -7,6 +7,17 @@ import { parseClientTerminalMessage } from '../../shared/protocol.js';
 import type { ServerTerminalMessage } from '../../shared/protocol.js';
 import { authenticateTerminalRequest } from './terminalRoutes.js';
 
+type FlushScheduler = (callback: () => void) => () => void;
+
+const terminalSocketMaxBufferedAmount = 16 * 1024 * 1024;
+const terminalSocketSlowClientCloseCode = 1013;
+const terminalSocketSlowClientReason = 'client too slow';
+
+const scheduleNextTickFlush: FlushScheduler = (callback) => {
+  const handle = setImmediate(callback);
+  return () => clearImmediate(handle);
+};
+
 export interface TerminalWebSocketServices {
   authService: AuthService;
   terminalManager: TerminalManager;
@@ -35,6 +46,7 @@ export async function registerTerminalWebSocket(
     const terminalId = request.params.id;
     let snapshotSent = false;
     const pendingMessages: ServerTerminalMessage[] = [];
+    const sender = new TerminalSocketSender(socket);
     const attachment = services.terminalManager.attachTerminal(
       terminalId,
       (message) => {
@@ -42,7 +54,7 @@ export async function registerTerminalWebSocket(
           pendingMessages.push(message);
           return;
         }
-        sendJson(socket, message);
+        sender.send(message);
       },
       { replay: false }
     );
@@ -52,10 +64,10 @@ export async function registerTerminalWebSocket(
       return;
     }
 
-    sendJson(socket, { type: 'snapshot', terminal: attachment.terminal, output: attachment.output });
+    sender.send({ type: 'snapshot', terminal: attachment.terminal, output: attachment.output });
     snapshotSent = true;
     for (const message of pendingMessages) {
-      sendJson(socket, message);
+      sender.send(message);
     }
     pendingMessages.length = 0;
 
@@ -107,6 +119,7 @@ export async function registerTerminalWebSocket(
 
     socket.on('close', () => {
       clearInterval(heartbeat);
+      sender.dispose();
       attachment.dispose();
     });
   });
@@ -115,5 +128,86 @@ export async function registerTerminalWebSocket(
 function sendJson(socket: WebSocket, payload: unknown): void {
   if (socket.readyState !== WebSocket.CLOSING && socket.readyState !== WebSocket.CLOSED) {
     socket.send(JSON.stringify(payload));
+  }
+}
+
+export class TerminalSocketSender {
+  private pendingOutput: Extract<ServerTerminalMessage, { type: 'output' }> | null = null;
+  private cancelFlush: (() => void) | null = null;
+  private closedForBackpressure = false;
+
+  constructor(
+    private readonly socket: WebSocket,
+    private readonly scheduleFlush: FlushScheduler = scheduleNextTickFlush,
+    private readonly maxBufferedAmount = terminalSocketMaxBufferedAmount
+  ) {}
+
+  send(message: ServerTerminalMessage): void {
+    if (message.type === 'output') {
+      this.queueOutput(message);
+      return;
+    }
+
+    this.flushOutput();
+    this.sendNow(message);
+  }
+
+  dispose(): void {
+    this.cancelPendingFlush();
+    this.pendingOutput = null;
+  }
+
+  private queueOutput(message: Extract<ServerTerminalMessage, { type: 'output' }>): void {
+    if (this.pendingOutput && this.pendingOutput.terminalId === message.terminalId) {
+      this.pendingOutput = {
+        ...this.pendingOutput,
+        data: `${this.pendingOutput.data}${message.data}`
+      };
+    } else {
+      this.flushOutput();
+      this.pendingOutput = { ...message };
+    }
+
+    if (!this.cancelFlush) {
+      this.cancelFlush = this.scheduleFlush(() => {
+        this.cancelFlush = null;
+        this.flushOutput();
+      });
+    }
+  }
+
+  private flushOutput(): void {
+    this.cancelPendingFlush();
+    const output = this.pendingOutput;
+    this.pendingOutput = null;
+    if (output) {
+      this.sendNow(output);
+    }
+  }
+
+  private cancelPendingFlush(): void {
+    this.cancelFlush?.();
+    this.cancelFlush = null;
+  }
+
+  private sendNow(payload: ServerTerminalMessage): void {
+    if (this.shouldCloseForBackpressure()) {
+      this.closeSlowClient();
+      return;
+    }
+
+    sendJson(this.socket, payload);
+  }
+
+  private shouldCloseForBackpressure(): boolean {
+    return this.socket.bufferedAmount > this.maxBufferedAmount;
+  }
+
+  private closeSlowClient(): void {
+    if (this.closedForBackpressure || this.socket.readyState === WebSocket.CLOSING || this.socket.readyState === WebSocket.CLOSED) {
+      return;
+    }
+    this.closedForBackpressure = true;
+    this.socket.close(terminalSocketSlowClientCloseCode, terminalSocketSlowClientReason);
   }
 }
