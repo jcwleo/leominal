@@ -6,6 +6,7 @@ import { ApiError, type ApiClient, createApiClient } from '../api/client.js';
 import type { TextEditorPaneModel } from '../files/TextEditorPane.js';
 import { uploadFiles } from '../api/uploadClient.js';
 import { FileExplorer } from '../files/FileExplorer.js';
+import { AppSettingsModal } from '../settings/AppSettingsModal.js';
 import { workspaceIndexShortcutLabel } from './keyboardShortcuts.js';
 import { LeominalMark } from './LeominalMark.js';
 import { SplitPane } from './SplitPane.js';
@@ -53,6 +54,7 @@ export function TerminalWorkspace({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [sidebarMode, setSidebarMode] = useState<'workspaces' | 'files'>('workspaces');
   const [editors, setEditors] = useState<Record<string, TextEditorPaneModel>>({});
@@ -694,9 +696,14 @@ export function TerminalWorkspace({
         {showSidebarDetails ? (
           <div className="workspace-sidebar-footer">
             <span>{sessionLabel}</span>
-            <button type="button" className="secondary-button" onClick={() => void logout()}>
-              logout
-            </button>
+            <div className="workspace-session-actions">
+              <button type="button" className="secondary-button" onClick={() => setSettingsOpen(true)}>
+                Settings
+              </button>
+              <button type="button" className="secondary-button" onClick={() => void logout()}>
+                logout
+              </button>
+            </div>
           </div>
         ) : null}
       </aside>
@@ -748,6 +755,7 @@ export function TerminalWorkspace({
         ) : null}
         <UploadToast toast={uploadToast} onDismiss={() => setUploadToast(null)} />
       </section>
+      {settingsOpen ? <AppSettingsModal api={api} onClose={() => setSettingsOpen(false)} /> : null}
     </main>
   );
 }

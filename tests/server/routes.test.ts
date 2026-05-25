@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { Secret, TOTP } from 'otpauth';
 import WebSocket from 'ws';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TerminalLayoutState } from '../../src/shared/types.js';
@@ -132,6 +133,20 @@ function waitForNextTick(): Promise<void> {
 function waitForClose(socket: WebSocket): Promise<{ code: number; reason: string }> {
   return new Promise((resolve) => {
     socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() }));
+  });
+}
+
+function waitForCloseOrTimeout(socket: WebSocket, timeoutMs = 100): Promise<{ code: number; reason: string } | null> {
+  return new Promise((resolve) => {
+    const onClose = (code: number, reason: Buffer) => {
+      clearTimeout(timer);
+      resolve({ code, reason: reason.toString() });
+    };
+    const timer = setTimeout(() => {
+      socket.off('close', onClose);
+      resolve(null);
+    }, timeoutMs);
+    socket.once('close', onClose);
   });
 }
 
@@ -512,6 +527,71 @@ describe('terminal routes', () => {
 
     expect(snapshot).toMatchObject({ type: 'snapshot', output: ['ready'] });
   });
+
+  it('closes WebSockets authenticated by sessions revoked during TOTP enrollment', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'leominal-terminal-routes-'));
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      LEOMINAL_STATE_PATH: path.join(dir, 'state.json'),
+      LEOMINAL_STATIC_ROOT: dir,
+      LEOMINAL_ALLOWED_ORIGINS: 'http://127.0.0.1:3107',
+      LEOMINAL_SESSION_SECRET: 'session-secret-with-enough-length',
+      LEOMINAL_SESSION_TTL_SECONDS: '10'
+    });
+    const store = new FileStore(config.statePath);
+    await store.init();
+    const fixedNow = Date.UTC(2026, 4, 17, 0, 0, 0);
+    const authService = new AuthService(config, store, { now: () => fixedNow });
+    const adapter = new FakePtyAdapter();
+    const manager = new TerminalManager(config, adapter);
+    const app = await buildApp(config, { authService, terminalManager: manager, fileStore: store });
+    openApps.push(app);
+
+    const setup = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password',
+      headers: { origin: 'http://127.0.0.1:3107' },
+      payload: { password: 'correct horse battery staple' }
+    });
+    const setupCookie = authCookieHeader(setCookieHeaders(setup.headers['set-cookie']));
+    const existingLogin = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { origin: 'http://127.0.0.1:3107' },
+      payload: { password: 'correct horse battery staple' }
+    });
+    const existingCookie = authCookieHeader(setCookieHeaders(existingLogin.headers['set-cookie']));
+    const terminal = await manager.createTerminal();
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('missing app address');
+    }
+
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/terminals/${terminal.id}/ws`, {
+      headers: { cookie: existingCookie, origin: 'http://127.0.0.1:3107' }
+    });
+    const snapshotPromise = waitForMessage(socket);
+    await waitForOpen(socket);
+    await snapshotPromise;
+    const closePromise = waitForCloseOrTimeout(socket);
+
+    const enrollment = await app.inject({
+      method: 'POST',
+      url: '/api/auth/totp/enroll',
+      headers: { origin: 'http://127.0.0.1:3107', cookie: setupCookie }
+    });
+    const enrollmentBody = enrollment.json();
+    await app.inject({
+      method: 'POST',
+      url: '/api/auth/totp/confirm',
+      headers: { origin: 'http://127.0.0.1:3107', cookie: setupCookie },
+      payload: { enrollmentId: enrollmentBody.enrollmentId, code: totpCode(enrollmentBody.manualKey, fixedNow) }
+    });
+
+    expect(await closePromise).toEqual({ code: 1008, reason: 'session revoked' });
+    expect(adapter.processes[0]!.writes).toEqual([]);
+  });
 });
 
 describe('static app shell routes', () => {
@@ -708,7 +788,7 @@ describe('auth routes', () => {
     const terminals = await app.inject({ method: 'GET', url: '/api/terminals' });
 
     expect(session.statusCode).toBe(200);
-    expect(session.json()).toEqual({ passwordSet: false, authenticated: false, expiresAt: null });
+    expect(session.json()).toEqual({ passwordSet: false, authenticated: false, expiresAt: null, twoFactorEnabled: false });
     expect(terminals.statusCode).toBe(401);
   });
 
@@ -751,7 +831,12 @@ describe('auth routes', () => {
 
     const setCookies = response.cookies.map((cookie) => cookie.name);
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ passwordSet: true, authenticated: true, expiresAt: new Date(Date.UTC(2026, 4, 17, 0, 0, 10)).toISOString() });
+    expect(response.json()).toEqual({
+      passwordSet: true,
+      authenticated: true,
+      expiresAt: new Date(Date.UTC(2026, 4, 17, 0, 0, 10)).toISOString(),
+      twoFactorEnabled: false
+    });
     expect(setCookies).toContain(cookieNames.session);
     expect(response.cookies.every((cookie) => cookie.httpOnly)).toBe(true);
     expect(response.cookies.every((cookie) => cookie.sameSite === 'Lax')).toBe(true);
@@ -802,9 +887,239 @@ describe('auth routes', () => {
     });
 
     expect(login.statusCode).toBe(200);
-    expect(login.json()).toEqual({ passwordSet: true, authenticated: true, expiresAt: new Date(fixedNow + 10_000).toISOString() });
+    expect(login.json()).toEqual({
+      passwordSet: true,
+      authenticated: true,
+      expiresAt: new Date(fixedNow + 10_000).toISOString(),
+      twoFactorEnabled: false
+    });
     expect(login.cookies.map((cookie) => cookie.name)).toContain(cookieNames.session);
-    expect(session.json()).toEqual({ passwordSet: true, authenticated: true, expiresAt: new Date(fixedNow + 10_000).toISOString() });
+    expect(session.json()).toEqual({
+      passwordSet: true,
+      authenticated: true,
+      expiresAt: new Date(fixedNow + 10_000).toISOString(),
+      twoFactorEnabled: false
+    });
+  });
+
+  it('enrolls TOTP from authenticated settings without persisting the unverified secret', async () => {
+    const fixedNow = Date.UTC(2026, 4, 17, 0, 0, 0);
+    const built = await buildAuthTestApp(() => fixedNow);
+    app = built.app;
+    const setup = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password',
+      headers: { origin: 'http://127.0.0.1:3107' },
+      payload: { password: 'correct horse battery staple' }
+    });
+    const cookie = authCookieHeader(setCookieHeaders(setup.headers['set-cookie']));
+
+    const enrollment = await app.inject({
+      method: 'POST',
+      url: '/api/auth/totp/enroll',
+      headers: { origin: 'http://127.0.0.1:3107', cookie }
+    });
+    const enrollmentBody = enrollment.json();
+    expect(enrollment.statusCode).toBe(200);
+    expect(enrollmentBody).toMatchObject({
+      enrollmentId: expect.stringMatching(/^totp_enroll_/),
+      manualKey: expect.any(String),
+      otpauthUrl: expect.stringContaining('otpauth://totp/'),
+      qrCodeDataUrl: expect.stringMatching(/^data:image\/png;base64,/),
+      expiresAt: new Date(fixedNow + 10 * 60_000).toISOString()
+    });
+    expect((await built.store.read()).totpCredential).toBeNull();
+
+    const confirm = await app.inject({
+      method: 'POST',
+      url: '/api/auth/totp/confirm',
+      headers: { origin: 'http://127.0.0.1:3107', cookie },
+      payload: { enrollmentId: enrollmentBody.enrollmentId, code: totpCode(enrollmentBody.manualKey, fixedNow) }
+    });
+    const settings = await app.inject({ method: 'GET', url: '/api/settings', headers: { cookie } });
+
+    expect(confirm.statusCode).toBe(200);
+    expect(confirm.json()).toEqual({ twoFactorEnabled: true });
+    expect(settings.json()).toEqual({ security: { twoFactorEnabled: true } });
+    expect((await built.store.read()).totpCredential).toMatchObject({
+      algorithm: 'totp',
+      secret: enrollmentBody.manualKey
+    });
+  });
+
+  it('requires TOTP after enrollment before issuing a login session cookie', async () => {
+    const fixedNow = Date.UTC(2026, 4, 17, 0, 0, 0);
+    const built = await buildAuthTestApp(() => fixedNow);
+    app = built.app;
+    const setup = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password',
+      headers: { origin: 'http://127.0.0.1:3107' },
+      payload: { password: 'correct horse battery staple' }
+    });
+    const setupCookie = authCookieHeader(setCookieHeaders(setup.headers['set-cookie']));
+    const enrollment = await app.inject({
+      method: 'POST',
+      url: '/api/auth/totp/enroll',
+      headers: { origin: 'http://127.0.0.1:3107', cookie: setupCookie }
+    });
+    const enrollmentBody = enrollment.json();
+    await app.inject({
+      method: 'POST',
+      url: '/api/auth/totp/confirm',
+      headers: { origin: 'http://127.0.0.1:3107', cookie: setupCookie },
+      payload: { enrollmentId: enrollmentBody.enrollmentId, code: totpCode(enrollmentBody.manualKey, fixedNow) }
+    });
+
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { origin: 'http://127.0.0.1:3107' },
+      payload: { password: 'correct horse battery staple' }
+    });
+    const pendingCookie = authCookieHeader(setCookieHeaders(login.headers['set-cookie']));
+    const pendingSession = await app.inject({ method: 'GET', url: '/api/auth/session', headers: { cookie: pendingCookie } });
+    const wrongCode = await app.inject({
+      method: 'POST',
+      url: '/api/auth/totp/verify',
+      headers: { origin: 'http://127.0.0.1:3107', cookie: pendingCookie },
+      payload: { code: '000000' }
+    });
+    const verified = await app.inject({
+      method: 'POST',
+      url: '/api/auth/totp/verify',
+      headers: { origin: 'http://127.0.0.1:3107', cookie: pendingCookie },
+      payload: { code: totpCode(enrollmentBody.manualKey, fixedNow) }
+    });
+    const sessionCookie = authCookieHeader(setCookieHeaders(verified.headers['set-cookie']));
+    const fullSession = await app.inject({ method: 'GET', url: '/api/auth/session', headers: { cookie: sessionCookie } });
+
+    expect(login.statusCode).toBe(200);
+    expect(login.json()).toEqual({
+      passwordSet: true,
+      authenticated: false,
+      expiresAt: null,
+      twoFactorEnabled: true,
+      twoFactorRequired: true,
+      twoFactorChallengeExpiresAt: new Date(fixedNow + 5 * 60_000).toISOString()
+    });
+    const pendingCookieAttributes = login.cookies.find((cookie) => cookie.name === cookieNames.pendingTotp);
+    expect(pendingCookieAttributes).toMatchObject({ httpOnly: true, sameSite: 'Lax', maxAge: 300 });
+    expect(login.cookies.map((cookie) => cookie.name)).not.toContain(cookieNames.session);
+    expect(pendingSession.json()).toEqual({ passwordSet: true, authenticated: false, expiresAt: null, twoFactorEnabled: true });
+    expect((await app.inject({ method: 'GET', url: '/api/terminals', headers: { cookie: pendingCookie } })).statusCode).toBe(401);
+    expect(wrongCode.statusCode).toBe(401);
+    expect(wrongCode.json()).toEqual({ error: 'invalid_totp' });
+    expect(verified.statusCode).toBe(200);
+    expect(verified.cookies.map((cookie) => cookie.name)).toContain(cookieNames.session);
+    expect(verified.cookies.find((cookie) => cookie.name === cookieNames.pendingTotp)?.value).toBe('');
+    expect(fullSession.json()).toEqual({
+      passwordSet: true,
+      authenticated: true,
+      expiresAt: new Date(fixedNow + 10_000).toISOString(),
+      twoFactorEnabled: true
+    });
+  });
+
+  it('rate limits bad TOTP attempts across challenge cycling', async () => {
+    const fixedNow = Date.UTC(2026, 4, 17, 0, 0, 0);
+    const built = await buildAuthTestApp(() => fixedNow);
+    app = built.app;
+    const setup = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password',
+      headers: { origin: 'http://127.0.0.1:3107' },
+      payload: { password: 'correct horse battery staple' }
+    });
+    const setupCookie = authCookieHeader(setCookieHeaders(setup.headers['set-cookie']));
+    const enrollment = await app.inject({
+      method: 'POST',
+      url: '/api/auth/totp/enroll',
+      headers: { origin: 'http://127.0.0.1:3107', cookie: setupCookie }
+    });
+    const enrollmentBody = enrollment.json();
+    await app.inject({
+      method: 'POST',
+      url: '/api/auth/totp/confirm',
+      headers: { origin: 'http://127.0.0.1:3107', cookie: setupCookie },
+      payload: { enrollmentId: enrollmentBody.enrollmentId, code: totpCode(enrollmentBody.manualKey, fixedNow) }
+    });
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const login = await app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        headers: { origin: 'http://127.0.0.1:3107' },
+        payload: { password: 'correct horse battery staple' }
+      });
+      const pendingCookie = authCookieHeader(setCookieHeaders(login.headers['set-cookie']));
+      const wrongCode = await app.inject({
+        method: 'POST',
+        url: '/api/auth/totp/verify',
+        headers: { origin: 'http://127.0.0.1:3107', cookie: pendingCookie },
+        payload: { code: '000000' }
+      });
+      expect(wrongCode.statusCode).toBe(401);
+      expect(wrongCode.json()).toEqual({ error: 'invalid_totp' });
+    }
+
+    const nextLogin = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { origin: 'http://127.0.0.1:3107' },
+      payload: { password: 'correct horse battery staple' }
+    });
+    const nextPendingCookie = authCookieHeader(setCookieHeaders(nextLogin.headers['set-cookie']));
+    const blocked = await app.inject({
+      method: 'POST',
+      url: '/api/auth/totp/verify',
+      headers: { origin: 'http://127.0.0.1:3107', cookie: nextPendingCookie },
+      payload: { code: '000000' }
+    });
+
+    expect(blocked.statusCode).toBe(429);
+    expect(blocked.json()).toEqual({ error: 'rate_limited' });
+  });
+
+  it('rejects protected APIs for sessions created before TOTP was enabled', async () => {
+    const fixedNow = Date.UTC(2026, 4, 17, 0, 0, 0);
+    const built = await buildAuthTestApp(() => fixedNow);
+    app = built.app;
+    const setup = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password',
+      headers: { origin: 'http://127.0.0.1:3107' },
+      payload: { password: 'correct horse battery staple' }
+    });
+    const setupCookie = authCookieHeader(setCookieHeaders(setup.headers['set-cookie']));
+    const existingLogin = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      headers: { origin: 'http://127.0.0.1:3107' },
+      payload: { password: 'correct horse battery staple' }
+    });
+    const existingCookie = authCookieHeader(setCookieHeaders(existingLogin.headers['set-cookie']));
+    const enrollment = await app.inject({
+      method: 'POST',
+      url: '/api/auth/totp/enroll',
+      headers: { origin: 'http://127.0.0.1:3107', cookie: setupCookie }
+    });
+    const enrollmentBody = enrollment.json();
+    await app.inject({
+      method: 'POST',
+      url: '/api/auth/totp/confirm',
+      headers: { origin: 'http://127.0.0.1:3107', cookie: setupCookie },
+      payload: { enrollmentId: enrollmentBody.enrollmentId, code: totpCode(enrollmentBody.manualKey, fixedNow) }
+    });
+
+    const protectedApi = await app.inject({ method: 'GET', url: '/api/terminals', headers: { cookie: existingCookie } });
+    const existingSession = await app.inject({ method: 'GET', url: '/api/auth/session', headers: { cookie: existingCookie } });
+    const enrollingSession = await app.inject({ method: 'GET', url: '/api/settings', headers: { cookie: setupCookie } });
+
+    expect(protectedApi.statusCode).toBe(401);
+    expect(existingSession.json()).toEqual({ passwordSet: true, authenticated: false, expiresAt: null, twoFactorEnabled: true });
+    expect(enrollingSession.statusCode).toBe(200);
+    expect(enrollingSession.json()).toEqual({ security: { twoFactorEnabled: true } });
   });
 
   it('logs out by clearing the session cookie', async () => {
@@ -828,7 +1143,7 @@ describe('auth routes', () => {
     });
 
     expect(logout.statusCode).toBe(200);
-    expect(logout.json()).toEqual({ passwordSet: true, authenticated: false, expiresAt: null });
+    expect(logout.json()).toEqual({ passwordSet: true, authenticated: false, expiresAt: null, twoFactorEnabled: false });
     expect(logout.cookies.find((cookie) => cookie.name === cookieNames.session)?.value).toBe('');
   });
 
@@ -842,7 +1157,18 @@ describe('auth routes', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ passwordSet: false, authenticated: false, expiresAt: null });
+    expect(response.json()).toEqual({ passwordSet: false, authenticated: false, expiresAt: null, twoFactorEnabled: false });
     expect(terminalManager.closeAll).not.toHaveBeenCalled();
   });
 });
+
+function totpCode(secret: string, timestamp: number): string {
+  return new TOTP({
+    issuer: 'Leominal',
+    label: 'local terminal',
+    algorithm: 'SHA1',
+    digits: 6,
+    period: 30,
+    secret: Secret.fromBase32(secret)
+  }).generate({ timestamp });
+}

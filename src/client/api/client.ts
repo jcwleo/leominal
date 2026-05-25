@@ -1,4 +1,5 @@
 import type {
+  AppSettingsResponse,
   CreateTerminalRequest,
   FileCreateRequest,
   FileCreateResponse,
@@ -23,9 +24,13 @@ import type {
   TerminalLayoutResponse,
   TerminalListResponse,
   TerminalResponse,
+  TotpConfirmRequest,
+  TotpEnrollmentResponse,
+  TotpEnrollmentStatus,
+  TotpVerifyRequest,
   UpdateTerminalLayoutRequest
 } from '../../shared/protocol.js';
-import type { AuthSessionStatus, TerminalId } from '../../shared/types.js';
+import type { AuthLoginResponse, AuthSessionStatus, TerminalId } from '../../shared/types.js';
 
 type FetchLike = typeof fetch;
 
@@ -42,7 +47,11 @@ export class ApiError extends Error {
 export interface ApiClient {
   getSession(): Promise<AuthSessionStatus>;
   setupPassword(request: PasswordRequest): Promise<AuthSessionStatus>;
-  login(request: PasswordRequest): Promise<AuthSessionStatus>;
+  login(request: PasswordRequest): Promise<AuthLoginResponse>;
+  getSettings(): Promise<AppSettingsResponse>;
+  startTotpEnrollment(): Promise<TotpEnrollmentResponse>;
+  confirmTotpEnrollment(request: TotpConfirmRequest): Promise<TotpEnrollmentStatus>;
+  verifyTotpLogin(request: TotpVerifyRequest): Promise<AuthSessionStatus>;
   logout(): Promise<AuthSessionStatus>;
   listTerminals(): Promise<TerminalListResponse>;
   getTerminalLayout(): Promise<TerminalLayoutResponse>;
@@ -65,7 +74,13 @@ export function createApiClient(fetcher: FetchLike = fetch): ApiClient {
   return {
     getSession: () => requestJson<AuthSessionStatus>(fetcher, '/api/auth/session'),
     setupPassword: (request) => requestJson<AuthSessionStatus>(fetcher, '/api/auth/password', jsonInit('POST', request)),
-    login: (request) => requestJson<AuthSessionStatus>(fetcher, '/api/auth/login', jsonInit('POST', request)),
+    login: (request) => requestJson<AuthLoginResponse>(fetcher, '/api/auth/login', jsonInit('POST', request)),
+    getSettings: () => requestJson<AppSettingsResponse>(fetcher, '/api/settings'),
+    startTotpEnrollment: () =>
+      requestJson<TotpEnrollmentResponse>(fetcher, '/api/auth/totp/enroll', { method: 'POST', credentials: 'same-origin' }),
+    confirmTotpEnrollment: (request) =>
+      requestJson<TotpEnrollmentStatus>(fetcher, '/api/auth/totp/confirm', jsonInit('POST', request)),
+    verifyTotpLogin: (request) => requestJson<AuthSessionStatus>(fetcher, '/api/auth/totp/verify', jsonInit('POST', request)),
     logout: () => requestJson<AuthSessionStatus>(fetcher, '/api/auth/logout', { method: 'POST', credentials: 'same-origin' }),
     listTerminals: () => requestJson<TerminalListResponse>(fetcher, '/api/terminals'),
     getTerminalLayout: () => requestJson<TerminalLayoutResponse>(fetcher, '/api/terminal-layout'),

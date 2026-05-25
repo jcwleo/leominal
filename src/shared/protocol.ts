@@ -4,6 +4,32 @@ export interface PasswordRequest {
   password: string;
 }
 
+export interface TotpVerifyRequest {
+  code: string;
+}
+
+export interface TotpConfirmRequest extends TotpVerifyRequest {
+  enrollmentId: string;
+}
+
+export interface TotpEnrollmentResponse {
+  enrollmentId: string;
+  manualKey: string;
+  otpauthUrl: string;
+  qrCodeDataUrl: string;
+  expiresAt: string;
+}
+
+export interface TotpEnrollmentStatus {
+  twoFactorEnabled: true;
+}
+
+export interface AppSettingsResponse {
+  security: {
+    twoFactorEnabled: boolean;
+  };
+}
+
 export interface CreateTerminalRequest {
   parentTerminalId?: TerminalId;
   cwd?: string;

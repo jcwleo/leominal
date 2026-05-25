@@ -398,6 +398,7 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   border-top: 1px solid var(--leo-line);
   padding: 12px 16px;
   color: var(--leo-fg-3);
@@ -408,6 +409,234 @@ textarea {
   min-height: 0;
   color: var(--leo-fg-2);
   font-size: 10.5px;
+}
+
+.workspace-session-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.workspace-session-actions button {
+  min-height: 24px;
+  border-radius: 5px;
+  padding: 0 8px;
+}
+
+.settings-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(4px);
+}
+
+.settings-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(760px, 100%);
+  max-height: min(620px, calc(var(--leominal-viewport-height) - 40px));
+  min-height: min(520px, calc(var(--leominal-viewport-height) - 40px));
+  overflow: hidden;
+  border: 1px solid var(--leo-line-2);
+  border-radius: 8px;
+  color: var(--leo-fg);
+  background: var(--leo-bg);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.62);
+}
+
+.settings-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--leo-line);
+  padding: 14px 16px;
+}
+
+.settings-modal-header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-modal-header .icon-button {
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+}
+
+.settings-modal-body {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.settings-section-tabs {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 4px;
+  border-right: 1px solid var(--leo-line);
+  padding: 12px;
+  background: var(--leo-bg-sidebar);
+}
+
+.settings-section-tabs button {
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 0 10px;
+  color: var(--leo-fg-2);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-section-tabs button:hover:not(:disabled) {
+  color: var(--leo-fg);
+  background: var(--leo-bg-2);
+}
+
+.settings-section-tabs button[aria-selected="true"] {
+  border-color: rgba(94, 234, 212, 0.55);
+  color: var(--leo-accent);
+  background: var(--leo-accent-soft);
+}
+
+.settings-panel-shell {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+}
+
+.settings-panel {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.settings-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.settings-panel-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.settings-status {
+  flex: 0 0 auto;
+  border: 1px solid rgba(52, 211, 153, 0.36);
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: var(--leo-ok);
+  background: rgba(52, 211, 153, 0.08);
+  font-family: var(--leo-font-mono);
+  font-size: 10.5px;
+}
+
+.settings-control {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  border-top: 1px solid var(--leo-line);
+  padding-top: 14px;
+}
+
+.settings-control-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.settings-control-summary strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-control-summary span {
+  color: var(--leo-fg-3);
+  font-family: var(--leo-font-mono);
+  font-size: 11px;
+}
+
+.primary-settings-button {
+  justify-self: start;
+  height: 34px;
+  border: 1px solid var(--leo-accent);
+  border-radius: 6px;
+  padding: 0 12px;
+  color: var(--leo-accent);
+  background: var(--leo-accent-soft);
+  font-family: var(--leo-font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.primary-settings-button:hover:not(:disabled) {
+  color: #062423;
+  background: var(--leo-accent);
+  box-shadow: 0 0 14px var(--leo-accent-glow);
+}
+
+.settings-totp-form {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+}
+
+.settings-totp-form img {
+  grid-row: span 3;
+  width: 112px;
+  height: 112px;
+  border: 1px solid var(--leo-line);
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.settings-totp-form label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--leo-fg-3);
+  font-family: var(--leo-font-mono);
+  font-size: 11px;
+}
+
+.settings-totp-form input {
+  width: 100%;
+  height: 34px;
+  min-width: 0;
+  border: 1px solid var(--leo-line-2);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--leo-fg);
+  background: var(--leo-bg-2);
+  font-family: var(--leo-font-mono);
+  font-size: 12px;
+}
+
+.settings-totp-form input:focus {
+  border-color: var(--leo-accent);
+  box-shadow: 0 0 0 2px var(--leo-accent-soft);
 }
 
 .file-explorer {
@@ -1852,5 +2081,47 @@ h1 {
   .terminal-status-bar {
     height: 24px;
     padding: 0 12px;
+  }
+
+  .settings-modal-backdrop {
+    align-items: stretch;
+    padding: 10px;
+  }
+
+  .settings-modal {
+    width: 100%;
+    max-height: calc(var(--leominal-viewport-height) - 20px);
+    min-height: 0;
+  }
+
+  .settings-modal-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-section-tabs {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--leo-line);
+  }
+
+  .settings-section-tabs button {
+    flex: 0 0 auto;
+    min-width: 96px;
+    text-align: center;
+  }
+
+  .settings-panel-shell {
+    padding: 14px;
+  }
+
+  .settings-control-summary,
+  .settings-totp-form {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-totp-form img {
+    grid-row: auto;
   }
 }

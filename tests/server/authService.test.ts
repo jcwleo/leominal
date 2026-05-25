@@ -2,18 +2,19 @@ import { mkdtemp } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { Secret, TOTP } from 'otpauth';
 import { loadConfig } from '../../src/server/config.js';
 import { AuthService } from '../../src/server/auth/authService.js';
 import { InMemoryRateLimit } from '../../src/server/auth/rateLimit.js';
 import { FileStore } from '../../src/server/storage/fileStore.js';
 
-async function makeAuth(now: () => number = () => Date.UTC(2026, 4, 17, 0, 0, 0)) {
+async function makeAuth(now: () => number = () => Date.UTC(2026, 4, 17, 0, 0, 0), sessionTtlSeconds = '10') {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'leominal-auth-'));
   const config = loadConfig({
     NODE_ENV: 'test',
     LEOMINAL_STATE_PATH: path.join(dir, 'state.json'),
     LEOMINAL_SESSION_SECRET: 'session-secret-with-enough-length',
-    LEOMINAL_SESSION_TTL_SECONDS: '10'
+    LEOMINAL_SESSION_TTL_SECONDS: sessionTtlSeconds
   });
   const store = new FileStore(config.statePath);
   await store.init();
@@ -49,7 +50,8 @@ describe('AuthService', () => {
     await expect(auth.getSessionStatus(undefined)).resolves.toEqual({
       passwordSet: false,
       authenticated: false,
-      expiresAt: null
+      expiresAt: null,
+      twoFactorEnabled: false
     });
   });
 
@@ -81,11 +83,132 @@ describe('AuthService', () => {
     await expect(auth.loginWithPassword('wrong password')).rejects.toMatchObject({ code: 'INVALID_PASSWORD' });
     const session = await auth.loginWithPassword('correct horse battery staple');
 
+    expect(session).toMatchObject({ status: 'authenticated' });
     expect(session.sessionId).toMatch(/^sess_/);
     await expect(auth.getSessionStatus(session.sessionId)).resolves.toMatchObject({
       passwordSet: true,
       authenticated: true,
-      expiresAt: new Date(now + 10_000).toISOString()
+      expiresAt: new Date(now + 10_000).toISOString(),
+      twoFactorEnabled: false
+    });
+  });
+
+  it('enrolls TOTP from an authenticated session without persisting the unverified secret', async () => {
+    const { auth, store } = await makeAuth(() => now);
+    const session = await auth.setupPassword('correct horse battery staple');
+
+    const enrollment = await auth.startTotpEnrollment(session.sessionId);
+    expect(enrollment.manualKey).toBeTypeOf('string');
+    expect(enrollment.qrCodeDataUrl).toMatch(/^data:image\/png;base64,/);
+    expect((await store.read()).totpCredential).toBeNull();
+
+    const code = totpCode(enrollment.manualKey, now);
+    await expect(auth.confirmTotpEnrollment(session.sessionId, enrollment.enrollmentId, code)).resolves.toEqual({
+      twoFactorEnabled: true
+    });
+    expect((await store.read()).totpCredential).toMatchObject({
+      algorithm: 'totp',
+      secret: enrollment.manualKey,
+      digits: 6,
+      period: 30
+    });
+    await expect(auth.getSessionStatus(session.sessionId)).resolves.toMatchObject({
+      passwordSet: true,
+      authenticated: true,
+      twoFactorEnabled: true
+    });
+  });
+
+  it('expires unconfirmed TOTP enrollments without persisting the secret', async () => {
+    const { auth, store } = await makeAuth(() => now, '1200');
+    const session = await auth.setupPassword('correct horse battery staple');
+    const enrollment = await auth.startTotpEnrollment(session.sessionId);
+
+    now += 10 * 60_000 + 1;
+
+    await expect(auth.confirmTotpEnrollment(session.sessionId, enrollment.enrollmentId, totpCode(enrollment.manualKey, now))).rejects.toMatchObject({
+      code: 'TOTP_CHALLENGE_EXPIRED'
+    });
+    expect((await store.read()).totpCredential).toBeNull();
+  });
+
+  it('requires TOTP after enrollment before creating the full login session', async () => {
+    const { auth } = await makeAuth(() => now);
+    const setupSession = await auth.setupPassword('correct horse battery staple');
+    const enrollment = await auth.startTotpEnrollment(setupSession.sessionId);
+    await auth.confirmTotpEnrollment(setupSession.sessionId, enrollment.enrollmentId, totpCode(enrollment.manualKey, now));
+
+    const passwordOnly = await auth.loginWithPassword('correct horse battery staple');
+    expect(passwordOnly).toMatchObject({
+      status: 'totp_required',
+      expiresAt: new Date(now + 5 * 60_000).toISOString()
+    });
+    expect('sessionId' in passwordOnly).toBe(false);
+
+    await expect(auth.completeTotpLogin(passwordOnly.challengeId, '000000')).rejects.toMatchObject({ code: 'INVALID_TOTP' });
+    const session = await auth.completeTotpLogin(passwordOnly.challengeId, totpCode(enrollment.manualKey, now));
+
+    expect(session.sessionId).toMatch(/^sess_/);
+    await expect(auth.getSessionStatus(session.sessionId)).resolves.toMatchObject({
+      authenticated: true,
+      twoFactorEnabled: true
+    });
+  });
+
+  it('expires pending TOTP login challenges', async () => {
+    const { auth } = await makeAuth(() => now);
+    const setupSession = await auth.setupPassword('correct horse battery staple');
+    const enrollment = await auth.startTotpEnrollment(setupSession.sessionId);
+    await auth.confirmTotpEnrollment(setupSession.sessionId, enrollment.enrollmentId, totpCode(enrollment.manualKey, now));
+    const challenge = await auth.loginWithPassword('correct horse battery staple');
+    if (challenge.status !== 'totp_required') {
+      throw new Error('expected TOTP challenge');
+    }
+
+    now += 5 * 60_000 + 1;
+
+    await expect(auth.completeTotpLogin(challenge.challengeId, totpCode(enrollment.manualKey, now))).rejects.toMatchObject({
+      code: 'TOTP_CHALLENGE_EXPIRED'
+    });
+  });
+
+  it('rate limits bad TOTP login attempts across newly created challenges', async () => {
+    const { auth } = await makeAuth(() => now);
+    const setupSession = await auth.setupPassword('correct horse battery staple');
+    const enrollment = await auth.startTotpEnrollment(setupSession.sessionId);
+    await auth.confirmTotpEnrollment(setupSession.sessionId, enrollment.enrollmentId, totpCode(enrollment.manualKey, now));
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const challenge = await auth.loginWithPassword('correct horse battery staple', 'client-a');
+      if (challenge.status !== 'totp_required') {
+        throw new Error('expected TOTP challenge');
+      }
+      await expect(auth.completeTotpLogin(challenge.challengeId, '000000')).rejects.toMatchObject({ code: 'INVALID_TOTP' });
+    }
+
+    const nextChallenge = await auth.loginWithPassword('correct horse battery staple', 'client-a');
+    if (nextChallenge.status !== 'totp_required') {
+      throw new Error('expected TOTP challenge');
+    }
+    await expect(auth.completeTotpLogin(nextChallenge.challengeId, '000000')).rejects.toMatchObject({ code: 'RATE_LIMITED' });
+  });
+
+  it('invalidates password-only sessions created before TOTP enrollment except the confirming session', async () => {
+    const { auth } = await makeAuth(() => now);
+    const setupSession = await auth.setupPassword('correct horse battery staple');
+    const existingPasswordSession = await auth.loginWithPassword('correct horse battery staple');
+    if (existingPasswordSession.status !== 'authenticated') {
+      throw new Error('expected password-only login before TOTP enrollment');
+    }
+
+    const enrollment = await auth.startTotpEnrollment(setupSession.sessionId);
+    await auth.confirmTotpEnrollment(setupSession.sessionId, enrollment.enrollmentId, totpCode(enrollment.manualKey, now));
+
+    await expect(auth.validateSession(setupSession.sessionId)).resolves.toBe(true);
+    await expect(auth.validateSession(existingPasswordSession.sessionId)).resolves.toBe(false);
+    await expect(auth.getSessionStatus(existingPasswordSession.sessionId)).resolves.toMatchObject({
+      authenticated: false,
+      twoFactorEnabled: true
     });
   });
 
@@ -120,7 +243,19 @@ describe('AuthService', () => {
     await expect(auth.getSessionStatus(session.sessionId)).resolves.toEqual({
       passwordSet: true,
       authenticated: false,
-      expiresAt: null
+      expiresAt: null,
+      twoFactorEnabled: false
     });
   });
 });
+
+function totpCode(secret: string, timestamp: number): string {
+  return new TOTP({
+    issuer: 'Leominal',
+    label: 'local terminal',
+    algorithm: 'SHA1',
+    digits: 6,
+    period: 30,
+    secret: Secret.fromBase32(secret)
+  }).generate({ timestamp });
+}

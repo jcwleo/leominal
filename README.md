@@ -20,6 +20,7 @@ Leominal is not a hosted shell product, not a SaaS app, and not a multi-user acc
 - Uploads dropped files or folders into the active terminal pane's current working directory.
 - Browses and edits files under the active terminal pane's current working directory.
 - Stores a first-run password hash in a local state file.
+- Supports opt-in authenticator-app 2FA from the general Settings modal.
 - Uses same-origin cookies and origin checks for mutating routes and terminal WebSockets.
 - Includes production-style local service commands.
 - Includes PWA metadata and an iPad home-screen icon.
@@ -28,7 +29,7 @@ Leominal is not a hosted shell product, not a SaaS app, and not a multi-user acc
 
 Leominal is designed for a single owner on a trusted machine or trusted private network.
 
-The built-in password gate is a local access control layer, not a replacement for a public identity provider. If someone reaches Leominal and authenticates, they get a shell on the host account running the server.
+The built-in password gate, with optional authenticator-app 2FA, is a local access control layer, not a replacement for a public identity provider. If someone reaches Leominal and authenticates, they get a shell on the host account running the server.
 
 Recommended boundary:
 
@@ -125,7 +126,7 @@ Open:
 http://127.0.0.1:3107
 ```
 
-On the first visit, set the local Leominal password in the browser. The password credential is stored as a salted `scrypt` hash in the local state file.
+On the first visit, set the local Leominal password in the browser. The password credential is stored as a salted `scrypt` hash in the local state file. After logging in, open Settings next to logout to enable optional authenticator-app 2FA for future password logins.
 
 ## Using `.env.example`
 
@@ -319,8 +320,9 @@ Manual smoke test:
 3. Create a terminal.
 4. Run `printf leominal-ok`.
 5. Split the terminal.
-6. Refresh the browser and confirm the terminal reconnects.
-7. Close panes and confirm their PTY processes exit.
+6. Open Settings, enable 2FA from Security, log out, and confirm the next login asks for an authenticator code.
+7. Refresh the browser and confirm the terminal reconnects.
+8. Close panes and confirm their PTY processes exit.
 
 ## Troubleshooting
 
@@ -337,7 +339,7 @@ npm run ctl -- doctor
 npm run ctl -- logs
 ```
 
-If you lose the local Leominal password, stop the server and remove the local state file at `LEOMINAL_STATE_PATH`. The next browser visit will show the first-run password setup screen again.
+If you lose the local Leominal password or the enrolled authenticator, stop the server and remove the local state file at `LEOMINAL_STATE_PATH`. The next browser visit will show the first-run password setup screen again, with 2FA disabled until you enroll it again.
 
 ## Limitations
 

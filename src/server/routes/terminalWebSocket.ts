@@ -8,10 +8,13 @@ import type { ServerTerminalMessage } from '../../shared/protocol.js';
 import { authenticateTerminalRequest } from './terminalRoutes.js';
 
 type FlushScheduler = (callback: () => void) => () => void;
+type Disposable = { dispose(): void };
 
 const terminalSocketMaxBufferedAmount = 16 * 1024 * 1024;
 const terminalSocketSlowClientCloseCode = 1013;
 const terminalSocketSlowClientReason = 'client too slow';
+const terminalSocketRevokedSessionCloseCode = 1008;
+const terminalSocketRevokedSessionReason = 'session revoked';
 
 const scheduleNextTickFlush: FlushScheduler = (callback) => {
   const handle = setImmediate(callback);
@@ -63,6 +66,10 @@ export async function registerTerminalWebSocket(
       socket.close(1008, 'terminal not found');
       return;
     }
+
+    const sessionRevocationSubscription = auth.sessionId
+      ? subscribeToSessionRevocation(services.authService, auth.sessionId, () => closeForRevokedSession(socket))
+      : null;
 
     sender.send({ type: 'snapshot', terminal: attachment.terminal, output: attachment.output });
     snapshotSent = true;
@@ -119,10 +126,29 @@ export async function registerTerminalWebSocket(
 
     socket.on('close', () => {
       clearInterval(heartbeat);
+      sessionRevocationSubscription?.dispose();
       sender.dispose();
       attachment.dispose();
     });
   });
+}
+
+function subscribeToSessionRevocation(authService: AuthService, sessionId: string, onRevoked: () => void): Disposable | null {
+  const service = authService as AuthService & { onSessionRevoked?: (listener: (revokedSessionId: string) => void) => Disposable };
+  if (typeof service.onSessionRevoked !== 'function') {
+    return null;
+  }
+  return service.onSessionRevoked((revokedSessionId) => {
+    if (revokedSessionId === sessionId) {
+      onRevoked();
+    }
+  });
+}
+
+function closeForRevokedSession(socket: WebSocket): void {
+  if (socket.readyState !== WebSocket.CLOSING && socket.readyState !== WebSocket.CLOSED) {
+    socket.close(terminalSocketRevokedSessionCloseCode, terminalSocketRevokedSessionReason);
+  }
 }
 
 function sendJson(socket: WebSocket, payload: unknown): void {

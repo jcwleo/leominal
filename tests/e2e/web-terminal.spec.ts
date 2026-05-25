@@ -4,6 +4,7 @@ import { mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { Secret, TOTP } from 'otpauth';
 import WebSocket from 'ws';
 import type {
   FileCreateResponse,
@@ -15,12 +16,13 @@ import type {
   UploadManifest,
   UploadResponse
 } from '../../src/shared/protocol.js';
-import type { TerminalSummary } from '../../src/shared/types.js';
+import type { AuthLoginResponse, TerminalSummary } from '../../src/shared/types.js';
 
 const e2ePort = Number(process.env.LEOMINAL_E2E_PORT ?? process.env.LEOMINAL_PORT ?? '3117');
 const baseUrl = `http://127.0.0.1:${e2ePort}`;
 const e2ePassword = 'leominal-e2e-password';
 const execFile = promisify(execFileCallback);
+let e2eTotpSecret: string | null = null;
 
 test.describe.configure({ mode: 'serial' });
 
@@ -31,7 +33,7 @@ test('browser UI sets the initial password, creates split panes, refreshes, and 
   await page.getByLabel('Confirm password').fill(e2ePassword);
   await page.getByRole('button', { name: 'Set password' }).click();
 
-  await page.getByRole('button', { name: 'New tab' }).waitFor();
+  await waitForWorkspace(page);
   await expect(page.locator('.xterm-container').first()).toBeVisible();
   await expectTerminalToFillWorkspace(page);
 
@@ -57,7 +59,7 @@ test('browser UI sets the initial password, creates split panes, refreshes, and 
   await expect(page.getByRole('navigation', { name: 'Terminal tabs' }).getByText('2 panes')).toBeVisible();
 
   await page.reload();
-  await page.getByRole('button', { name: 'New tab' }).waitFor();
+  await waitForWorkspace(page);
   await expect(page.getByRole('navigation', { name: 'Terminal tabs' }).getByText('2 panes')).toBeVisible();
 
   const terminalTabs = page.getByRole('navigation', { name: 'Terminal tabs' });
@@ -74,7 +76,7 @@ test('browser UI unlocks with the stored password on a returning visit', async (
   await page.getByLabel('Password', { exact: true }).fill(e2ePassword);
   await page.getByRole('button', { name: 'Unlock' }).click();
 
-  await page.getByRole('button', { name: 'New tab' }).waitFor();
+  await waitForWorkspace(page);
 });
 
 test('authenticates with the stored password, opens a PTY, reconnects, splits, and closes terminals', async ({ request }) => {
@@ -262,6 +264,25 @@ test('file explorer API is scoped to the active PTY cwd and blocks stale or esca
   }
 });
 
+test('settings modal enrolls TOTP and requires password plus code on the next login', async ({ page }) => {
+  await page.goto('/');
+  await unlockPageWithPassword(page);
+  await waitForWorkspace(page);
+
+  const manualKey = await enrollTotpFromSettings(page);
+  e2eTotpSecret = manualKey;
+
+  await page.getByRole('button', { name: 'logout' }).click();
+  await page.getByRole('heading', { name: 'Unlock terminal' }).waitFor();
+  await page.getByLabel('Password', { exact: true }).fill(e2ePassword);
+  await page.getByRole('button', { name: 'Unlock' }).click();
+  await page.getByRole('heading', { name: 'Verify code' }).waitFor();
+  await page.getByLabel('Verification code').fill(generateTotpCode(manualKey));
+  await page.getByRole('button', { name: 'Verify' }).click();
+
+  await waitForWorkspace(page);
+});
+
 async function authenticateRequest(request: APIRequestContext): Promise<void> {
   const session = await request.get('/api/auth/session');
   expect(session.ok()).toBe(true);
@@ -272,6 +293,42 @@ async function authenticateRequest(request: APIRequestContext): Promise<void> {
     data: { password: e2ePassword }
   });
   expect(response.ok()).toBe(true);
+  const authResponse = (await response.json()) as AuthLoginResponse;
+  if (authResponse.twoFactorRequired) {
+    if (!e2eTotpSecret) {
+      throw new Error('TOTP is enabled, but the e2e TOTP secret is not available.');
+    }
+    const verifyResponse = await request.post('/api/auth/totp/verify', {
+      headers: { origin: baseUrl },
+      data: { code: generateTotpCode(e2eTotpSecret) }
+    });
+    expect(verifyResponse.ok()).toBe(true);
+  }
+}
+
+async function unlockPageWithPassword(page: Page): Promise<void> {
+  await page.getByRole('heading', { name: 'Unlock terminal' }).waitFor();
+  await page.getByLabel('Password', { exact: true }).fill(e2ePassword);
+  await page.getByRole('button', { name: 'Unlock' }).click();
+}
+
+async function enrollTotpFromSettings(page: Page): Promise<string> {
+  await page.getByRole('button', { name: 'Settings' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  await expect(dialog.getByRole('tab', { name: 'Security' })).toBeVisible();
+  await expect(dialog.getByText('Two-factor authentication')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Enable 2FA' }).click();
+  const manualKey = await dialog.getByLabel('Manual setup key').inputValue();
+  await dialog.getByLabel('Verification code').fill(generateTotpCode(manualKey));
+  await dialog.getByRole('button', { name: 'Verify' }).click();
+  await expect(dialog.getByText('2FA enabled')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Close settings' }).click();
+  return manualKey;
+}
+
+async function waitForWorkspace(page: Page): Promise<void> {
+  const terminalTabs = page.getByRole('navigation', { name: 'Terminal tabs' });
+  await terminalTabs.getByRole('button', { name: 'New tab' }).waitFor();
 }
 
 async function filePost(request: APIRequestContext, url: string, data: unknown) {
@@ -420,4 +477,15 @@ function shellQuote(value: string): string {
 
 function octalEscape(value: string): string {
   return [...Buffer.from(value, 'utf8')].map((byte) => `\\${byte.toString(8).padStart(3, '0')}`).join('');
+}
+
+function generateTotpCode(secret: string): string {
+  return new TOTP({
+    issuer: 'Leominal',
+    label: 'Leominal',
+    algorithm: 'SHA1',
+    digits: 6,
+    period: 30,
+    secret: Secret.fromBase32(secret)
+  }).generate();
 }

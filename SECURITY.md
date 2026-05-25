@@ -38,9 +38,12 @@ The intended defense-in-depth layers are:
 
 - bind to `127.0.0.1` by default
 - keep remote access behind VPN, SSH tunnel, or reverse proxy access control
+- enable optional authenticator-app 2FA in Settings for browser password logins
 - use HTTPS with `LEOMINAL_COOKIE_SECURE=true` when remote
 - set precise `LEOMINAL_ALLOWED_ORIGINS`
 - keep `.env`, `.leominal/`, logs, and state files out of source control
+
+2FA enrollment is stored in the same local state file as the password hash and layout data. Losing the authenticator requires resetting the local state file; this resets the password and disables 2FA until it is enrolled again.
 
 ## Out Of Scope For Current Reports
 

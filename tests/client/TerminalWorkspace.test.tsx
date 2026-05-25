@@ -29,9 +29,10 @@ import type {
   TerminalLayoutResponse,
   TerminalListResponse,
   TerminalResponse,
+  TotpConfirmRequest,
   UpdateTerminalLayoutRequest
 } from '../../src/shared/protocol.js';
-import type { AuthSessionStatus, TerminalId, TerminalLayoutState, TerminalSummary } from '../../src/shared/types.js';
+import type { AuthLoginResponse, AuthSessionStatus, TerminalId, TerminalLayoutState, TerminalSummary } from '../../src/shared/types.js';
 import { ApiError } from '../../src/client/api/client.js';
 import type { ApiClient } from '../../src/client/api/client.js';
 
@@ -160,7 +161,17 @@ function createApi(initialTerminals: TerminalSummary[] = [terminal('term-alpha',
   return {
     getSession: vi.fn<() => Promise<AuthSessionStatus>>(),
     setupPassword: vi.fn<(request: PasswordRequest) => Promise<AuthSessionStatus>>(),
-    login: vi.fn<(request: PasswordRequest) => Promise<AuthSessionStatus>>(),
+    login: vi.fn<(request: PasswordRequest) => Promise<AuthLoginResponse>>(),
+    getSettings: vi.fn(async () => ({ security: { twoFactorEnabled: false } })),
+    startTotpEnrollment: vi.fn(async () => ({
+      enrollmentId: 'totp_enroll_test',
+      manualKey: 'JBSWY3DPEHPK3PXP',
+      otpauthUrl: 'otpauth://totp/Leominal:local',
+      qrCodeDataUrl: 'data:image/png;base64,abc',
+      expiresAt: '2026-05-17T00:10:00.000Z'
+    })),
+    confirmTotpEnrollment: vi.fn(async (_request: TotpConfirmRequest) => ({ twoFactorEnabled: true as const })),
+    verifyTotpLogin: vi.fn(),
     logout: vi.fn<() => Promise<AuthSessionStatus>>(),
     listTerminals: vi.fn(async (): Promise<TerminalListResponse> => ({ terminals: [...state.terminals] })),
     getTerminalLayout: vi.fn(async (): Promise<TerminalLayoutResponse> => state.layoutResponse),
@@ -433,10 +444,63 @@ describe('TerminalWorkspace', () => {
       await screen.findByRole('navigation', { name: 'Workspaces' });
 
       expect(screen.getByText('session · 11h left')).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Settings' })).toBeVisible();
       expect(screen.getByRole('button', { name: 'logout' })).toBeVisible();
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('opens a general settings modal with a Security section from the sidebar footer', async () => {
+    const api = createApi();
+
+    render(<TerminalWorkspace api={api} />);
+
+    await screen.findByRole('navigation', { name: 'Workspaces' });
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+
+    expect(within(dialog).getByRole('tab', { name: 'Security' })).toBeVisible();
+    expect(within(dialog).getByRole('heading', { name: 'Security' })).toBeVisible();
+    expect(within(dialog).getByText('Two-factor authentication')).toBeVisible();
+  });
+
+  it('moves focus into settings and restores focus when the dialog closes', async () => {
+    const api = createApi();
+
+    render(<TerminalWorkspace api={api} />);
+
+    await screen.findByRole('navigation', { name: 'Workspaces' });
+    const settingsButton = screen.getByRole('button', { name: 'Settings' });
+    settingsButton.focus();
+    fireEvent.click(settingsButton);
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+
+    expect(within(dialog).getByRole('button', { name: 'Close settings' })).toHaveFocus();
+    fireEvent.keyDown(within(dialog).getByRole('button', { name: 'Close settings' }), { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
+    expect(settingsButton).toHaveFocus();
+  });
+
+  it('enrolls TOTP from the Security section in settings', async () => {
+    const api = createApi();
+
+    render(<TerminalWorkspace api={api} />);
+
+    await screen.findByRole('navigation', { name: 'Workspaces' });
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Enable 2FA' }));
+
+    expect(await within(dialog).findByLabelText('Manual setup key')).toHaveValue('JBSWY3DPEHPK3PXP');
+    fireEvent.change(within(dialog).getByLabelText('Verification code'), { target: { value: '123456' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Verify' }));
+
+    await waitFor(() =>
+      expect(api.confirmTotpEnrollment).toHaveBeenCalledWith({ enrollmentId: 'totp_enroll_test', code: '123456' })
+    );
+    expect(await within(dialog).findByText('2FA enabled')).toBeVisible();
   });
 
   it('reloads the app from the status bar reload button', async () => {

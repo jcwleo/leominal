@@ -22,7 +22,7 @@ describe('client API helper', () => {
   });
 
   it('posts password login requests to the auth endpoint', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({ passwordSet: true, authenticated: true, expiresAt: null }));
+    const fetchMock = vi.fn(async () => jsonResponse({ passwordSet: true, authenticated: true, expiresAt: null, twoFactorEnabled: false }));
     const client = createApiClient(fetchMock);
 
     await client.login({ password: 'correct horse battery staple' });
@@ -32,6 +32,62 @@ describe('client API helper', () => {
       headers: { 'content-type': 'application/json' },
       credentials: 'same-origin',
       body: JSON.stringify({ password: 'correct horse battery staple' })
+    });
+  });
+
+  it('fetches app settings from the settings endpoint', async () => {
+    const response = { security: { twoFactorEnabled: false } };
+    const fetchMock = vi.fn(async () => jsonResponse(response));
+    const client = createApiClient(fetchMock);
+
+    await expect(client.getSettings()).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/settings', { credentials: 'same-origin' });
+  });
+
+  it('posts TOTP enrollment and confirmation requests to the auth endpoints', async () => {
+    const enrollment = {
+      enrollmentId: 'totp_enroll_123',
+      manualKey: 'JBSWY3DPEHPK3PXP',
+      otpauthUrl: 'otpauth://totp/Leominal:local',
+      qrCodeDataUrl: 'data:image/png;base64,abc',
+      expiresAt: '2026-05-17T00:10:00.000Z'
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(enrollment))
+      .mockResolvedValueOnce(jsonResponse({ twoFactorEnabled: true }));
+    const client = createApiClient(fetchMock);
+
+    await expect(client.startTotpEnrollment()).resolves.toEqual(enrollment);
+    await expect(client.confirmTotpEnrollment({ enrollmentId: 'totp_enroll_123', code: '123456' })).resolves.toEqual({
+      twoFactorEnabled: true
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/auth/totp/enroll', {
+      method: 'POST',
+      credentials: 'same-origin'
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/auth/totp/confirm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ enrollmentId: 'totp_enroll_123', code: '123456' })
+    });
+  });
+
+  it('posts TOTP login verification requests to the auth endpoint', async () => {
+    const response = { passwordSet: true, authenticated: true, expiresAt: '2026-05-17T00:10:00.000Z', twoFactorEnabled: true };
+    const fetchMock = vi.fn(async () => jsonResponse(response));
+    const client = createApiClient(fetchMock);
+
+    await expect(client.verifyTotpLogin({ code: '654321' })).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/totp/verify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ code: '654321' })
     });
   });
 

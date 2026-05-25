@@ -18,8 +18,8 @@ describe('FileStore', () => {
     const fileMode = (await stat(statePath)).mode & 0o777;
     const raw = JSON.parse(await readFile(statePath, 'utf8'));
 
-    expect(state).toEqual({ passwordCredential: null, terminalLayout: null });
-    expect(raw).toEqual({ passwordCredential: null, terminalLayout: null });
+    expect(state).toEqual({ passwordCredential: null, terminalLayout: null, totpCredential: null });
+    expect(raw).toEqual({ passwordCredential: null, terminalLayout: null, totpCredential: null });
     expect(fileMode).toBe(0o600);
   });
 
@@ -39,21 +39,24 @@ describe('FileStore', () => {
 
     expect(await reloaded.read()).toEqual({
       passwordCredential: credential,
-      terminalLayout: null
+      terminalLayout: null,
+      totpCredential: null
     });
   });
 
-  it('persists terminal layout metadata alongside the password credential', async () => {
+  it('persists terminal layout and TOTP metadata alongside the password credential', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'leominal-store-'));
     const store = new FileStore(path.join(dir, 'state.json'));
     await store.init();
     const credential = passwordCredential('hash-1');
+    const totp = totpCredential();
     const layout = terminalLayout();
 
     await store.update((state) =>
       ({
         ...state,
         passwordCredential: credential,
+        totpCredential: totp,
         terminalLayout: {
           layout,
           revision: 3,
@@ -67,6 +70,7 @@ describe('FileStore', () => {
 
     expect(await reloaded.read()).toEqual({
       passwordCredential: credential,
+      totpCredential: totp,
       terminalLayout: {
         layout,
         revision: 3,
@@ -96,7 +100,7 @@ describe('FileStore', () => {
 
     const store = new FileStore(statePath);
 
-    expect(await store.read()).toEqual({ passwordCredential: null, terminalLayout: null });
+    expect(await store.read()).toEqual({ passwordCredential: null, terminalLayout: null, totpCredential: null });
   });
 
   it('normalizes legacy password-only state to an empty terminal layout slot', async () => {
@@ -113,7 +117,7 @@ describe('FileStore', () => {
 
     const store = new FileStore(statePath);
 
-    expect(await store.read()).toEqual({ passwordCredential: credential, terminalLayout: null });
+    expect(await store.read()).toEqual({ passwordCredential: credential, terminalLayout: null, totpCredential: null });
   });
 
   it('drops malformed terminal layout state without dropping the password credential', async () => {
@@ -135,7 +139,68 @@ describe('FileStore', () => {
 
     const store = new FileStore(statePath);
 
-    expect(await store.read()).toEqual({ passwordCredential: credential, terminalLayout: null });
+    expect(await store.read()).toEqual({ passwordCredential: credential, terminalLayout: null, totpCredential: null });
+  });
+
+  it('drops malformed TOTP state without dropping password or terminal layout state', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'leominal-store-'));
+    const statePath = path.join(dir, 'state.json');
+    const credential = passwordCredential('hash-1');
+    const layout = terminalLayout();
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        passwordCredential: credential,
+        totpCredential: {
+          algorithm: 'totp',
+          secret: 42,
+          issuer: 'Leominal',
+          accountName: 'local',
+          createdAt: '2026-05-17T00:00:00.000Z',
+          updatedAt: '2026-05-17T00:00:00.000Z'
+        },
+        terminalLayout: {
+          layout,
+          revision: 2,
+          updatedAt: '2026-05-17T00:00:02.000Z'
+        }
+      }),
+      'utf8'
+    );
+
+    const store = new FileStore(statePath);
+
+    expect(await store.read()).toEqual({
+      passwordCredential: credential,
+      totpCredential: null,
+      terminalLayout: {
+        layout,
+        revision: 2,
+        updatedAt: '2026-05-17T00:00:02.000Z'
+      }
+    });
+  });
+
+  it('drops TOTP state with an invalid base32 secret', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'leominal-store-'));
+    const statePath = path.join(dir, 'state.json');
+    const credential = passwordCredential('hash-1');
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        passwordCredential: credential,
+        totpCredential: totpCredential('not-base32')
+      }),
+      'utf8'
+    );
+
+    const store = new FileStore(statePath);
+
+    expect(await store.read()).toEqual({
+      passwordCredential: credential,
+      totpCredential: null,
+      terminalLayout: null
+    });
   });
 
   it('serializes overlapping updates so concurrent password writes do not lose state', async () => {
@@ -211,6 +276,19 @@ function passwordCredential(hash: string): StoredPasswordCredential {
     algorithm: 'scrypt',
     hash,
     salt: 'salt',
+    createdAt: '2026-05-17T00:00:00.000Z',
+    updatedAt: '2026-05-17T00:00:00.000Z'
+  };
+}
+
+function totpCredential(secret = 'JBSWY3DPEHPK3PXP') {
+  return {
+    algorithm: 'totp',
+    secret,
+    issuer: 'Leominal',
+    accountName: 'local terminal',
+    digits: 6,
+    period: 30,
     createdAt: '2026-05-17T00:00:00.000Z',
     updatedAt: '2026-05-17T00:00:00.000Z'
   };

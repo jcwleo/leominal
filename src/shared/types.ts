@@ -17,6 +17,12 @@ export interface AuthSessionStatus {
   passwordSet: boolean;
   authenticated: boolean;
   expiresAt: string | null;
+  twoFactorEnabled: boolean;
+}
+
+export interface AuthLoginResponse extends AuthSessionStatus {
+  twoFactorRequired?: boolean;
+  twoFactorChallengeExpiresAt?: string;
 }
 
 export interface SplitNode {

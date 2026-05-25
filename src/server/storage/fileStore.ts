@@ -12,6 +12,17 @@ export interface StoredPasswordCredential {
   updatedAt: string;
 }
 
+export interface StoredTotpCredential {
+  algorithm: 'totp';
+  secret: string;
+  issuer: string;
+  accountName: string;
+  digits: number;
+  period: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StoredTerminalLayout {
   layout: TerminalLayoutState;
   revision: number;
@@ -21,9 +32,10 @@ export interface StoredTerminalLayout {
 export interface StoredState {
   passwordCredential: StoredPasswordCredential | null;
   terminalLayout: StoredTerminalLayout | null;
+  totpCredential: StoredTotpCredential | null;
 }
 
-const emptyState = (): StoredState => ({ passwordCredential: null, terminalLayout: null });
+const emptyState = (): StoredState => ({ passwordCredential: null, terminalLayout: null, totpCredential: null });
 
 function normalizeState(value: unknown): StoredState {
   if (!value || typeof value !== 'object') {
@@ -43,8 +55,47 @@ function normalizeState(value: unknown): StoredState {
 
   return {
     passwordCredential,
-    terminalLayout: normalizeStoredTerminalLayout(state.terminalLayout)
+    terminalLayout: normalizeStoredTerminalLayout(state.terminalLayout),
+    totpCredential: normalizeStoredTotpCredential(state.totpCredential)
   };
+}
+
+function normalizeStoredTotpCredential(value: unknown): StoredTotpCredential | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const candidate = value as Partial<StoredTotpCredential>;
+  const digits = candidate.digits;
+  const period = candidate.period;
+  if (
+    candidate.algorithm !== 'totp' ||
+    typeof candidate.secret !== 'string' ||
+    !isBase32Secret(candidate.secret) ||
+    typeof candidate.issuer !== 'string' ||
+    typeof candidate.accountName !== 'string' ||
+    typeof digits !== 'number' ||
+    !Number.isInteger(digits) ||
+    typeof period !== 'number' ||
+    !Number.isInteger(period) ||
+    typeof candidate.createdAt !== 'string' ||
+    typeof candidate.updatedAt !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    algorithm: 'totp',
+    secret: candidate.secret,
+    issuer: candidate.issuer,
+    accountName: candidate.accountName,
+    digits,
+    period,
+    createdAt: candidate.createdAt,
+    updatedAt: candidate.updatedAt
+  };
+}
+
+function isBase32Secret(value: string): boolean {
+  return value.length > 0 && /^[A-Z2-7]+=*$/i.test(value);
 }
 
 function normalizeStoredTerminalLayout(value: unknown): StoredTerminalLayout | null {
