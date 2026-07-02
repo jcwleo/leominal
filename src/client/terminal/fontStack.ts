@@ -17,7 +17,14 @@ export const terminalFontFamily = [
   '"Liberation Mono"',
   '"Symbols Nerd Font Mono"',
   '"Apple Symbols"',
-  '"Apple Color Emoji"',
+  // Covers ⏺ ⏸ ⏹ (U+23F8–23FA) with text glyphs on Apple platforms — the same
+  // font CoreText picks for iTerm2 — so WebKit cannot route them to the color
+  // emoji font. Unresolved (ignored) on non-Apple clients.
+  '"STIX Two Math"',
+  // No color-emoji font here: it would capture text-default symbols missing
+  // from the fonts above (⏺ ⏸ ⏹) and render them as emoji buttons that ignore
+  // ANSI colors. Emoji-default characters still reach the system emoji font
+  // through the browser's automatic fallback.
   'monospace'
 ].join(', ');
 
