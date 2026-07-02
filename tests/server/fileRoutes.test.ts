@@ -335,8 +335,7 @@ async function buildFileTestApp(options: BuildFileTestAppOptions = {}) {
     createTerminal: vi.fn(),
     attachTerminal: vi.fn(),
     writeToTerminal: vi.fn(() => true),
-    resizeTerminal: vi.fn(),
-    getOutputSnapshot: vi.fn()
+    resizeTerminal: vi.fn()
   };
   const fileStore = {
     read: vi.fn(async () => ({ terminalLayout: null })),

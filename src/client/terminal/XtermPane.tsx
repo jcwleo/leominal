@@ -257,12 +257,14 @@ export function XtermPane({ terminal, active, canClose, refreshCwdOnEnter = fals
       if (!xterm) {
         return;
       }
-      scheduleSettledFitAndReportSize();
-      xterm.clear();
-      for (const chunk of message.output) {
-        xterm.write(chunk);
+      // Fits scheduled before the snapshot (socket open, viewport events) must not resize the
+      // terminal away from the server dims while the async restore write is still parsing.
+      clearScheduledFit();
+      xterm.reset();
+      if (message.terminal.cols > 0 && message.terminal.rows > 0) {
+        xterm.resize(message.terminal.cols, message.terminal.rows);
       }
-      scheduleSettledFitAndReportSize();
+      xterm.write(message.output.join(''), () => scheduleSettledFitAndReportSize());
       return;
     }
 

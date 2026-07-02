@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import WebSocket from 'ws';
 import { isAllowedOrigin, type AppConfig } from '../config.js';
 import type { AuthService } from '../auth/authService.js';
-import type { TerminalManager } from '../terminal/TerminalManager.js';
+import type { TerminalAttachment, TerminalManager } from '../terminal/TerminalManager.js';
 import { parseClientTerminalMessage } from '../../shared/protocol.js';
 import type { ServerTerminalMessage } from '../../shared/protocol.js';
 import { authenticateTerminalRequest } from './terminalRoutes.js';
@@ -50,52 +50,30 @@ export async function registerTerminalWebSocket(
     let snapshotSent = false;
     const pendingMessages: ServerTerminalMessage[] = [];
     const sender = new TerminalSocketSender(socket);
-    const attachment = services.terminalManager.attachTerminal(
-      terminalId,
-      (message) => {
-        if (!snapshotSent) {
-          pendingMessages.push(message);
-          return;
-        }
-        sender.send(message);
-      },
-      { replay: false }
-    );
 
-    if (!attachment) {
-      socket.close(1008, 'terminal not found');
-      return;
-    }
+    let closed = false;
+    let cleanedUp = false;
+    let heartbeat: NodeJS.Timeout | null = null;
+    let attachment: TerminalAttachment | null = null;
 
     const sessionRevocationSubscription = auth.sessionId
       ? subscribeToSessionRevocation(services.authService, auth.sessionId, () => closeForRevokedSession(socket))
       : null;
 
-    sender.send({ type: 'snapshot', terminal: attachment.terminal, output: attachment.output });
-    snapshotSent = true;
-    for (const message of pendingMessages) {
-      sender.send(message);
-    }
-    pendingMessages.length = 0;
-
-    let isAlive = true;
-    const heartbeat = setInterval(() => {
-      if (socket.readyState !== WebSocket.OPEN) {
+    const cleanup = () => {
+      if (cleanedUp) {
         return;
       }
-      if (!isAlive) {
-        socket.terminate();
-        return;
+      cleanedUp = true;
+      if (heartbeat) {
+        clearInterval(heartbeat);
       }
-      isAlive = false;
-      socket.ping();
-    }, 30_000);
+      sessionRevocationSubscription?.dispose();
+      sender.dispose();
+      attachment?.dispose();
+    };
 
-    socket.on('pong', () => {
-      isAlive = true;
-    });
-
-    socket.on('message', (raw) => {
+    const handleClientMessage = (raw: WebSocket.RawData) => {
       const message = parseClientTerminalMessage(raw.toString());
       if (!message) {
         sendJson(socket, { type: 'error', message: 'invalid terminal message' });
@@ -122,14 +100,73 @@ export async function registerTerminalWebSocket(
       if (!services.terminalManager.resizeTerminal(message.terminalId, message.cols, message.rows)) {
         sendJson(socket, { type: 'error', message: 'terminal is not resizable' });
       }
+    };
+
+    // Listeners must exist before the attach await: frames arriving in that window would otherwise
+    // be dropped silently (a dropped resize is persistent — the client dedupes and never resends)
+    // and a close would leak the heartbeat and the attachment.
+    const bufferedFrames: WebSocket.RawData[] = [];
+    let handleMessage: (raw: WebSocket.RawData) => void = (raw) => {
+      bufferedFrames.push(raw);
+    };
+    socket.on('message', (raw) => handleMessage(raw));
+    socket.on('close', () => {
+      closed = true;
+      cleanup();
+    });
+    let isAlive = true;
+    socket.on('pong', () => {
+      isAlive = true;
     });
 
-    socket.on('close', () => {
-      clearInterval(heartbeat);
-      sessionRevocationSubscription?.dispose();
-      sender.dispose();
+    attachment = await services.terminalManager.attachTerminal(
+      terminalId,
+      (message) => {
+        if (!snapshotSent) {
+          pendingMessages.push(message);
+          return;
+        }
+        sender.send(message);
+      },
+      { replay: false }
+    );
+
+    if (!attachment) {
+      cleanup();
+      socket.close(1008, 'terminal not found');
+      return;
+    }
+    if (closed) {
+      // The close handler already ran cleanup before the attachment existed.
       attachment.dispose();
-    });
+      return;
+    }
+
+    handleMessage = handleClientMessage;
+    for (const raw of bufferedFrames) {
+      handleClientMessage(raw);
+    }
+    bufferedFrames.length = 0;
+
+    sender.send({ type: 'snapshot', terminal: attachment.terminal, output: attachment.output });
+    snapshotSent = true;
+    for (const message of pendingMessages) {
+      sender.send(message);
+    }
+    pendingMessages.length = 0;
+    services.terminalManager.nudgeTerminal(terminalId);
+
+    heartbeat = setInterval(() => {
+      if (socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      if (!isAlive) {
+        socket.terminate();
+        return;
+      }
+      isAlive = false;
+      socket.ping();
+    }, 30_000);
   });
 }
 

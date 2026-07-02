@@ -275,8 +275,7 @@ async function buildUploadTestApp(options: BuildUploadTestAppOptions = {}) {
     createTerminal: vi.fn(),
     attachTerminal: vi.fn(),
     writeToTerminal: vi.fn(),
-    resizeTerminal: vi.fn(),
-    getOutputSnapshot: vi.fn()
+    resizeTerminal: vi.fn()
   };
   const fileStore = {
     read: vi.fn(async () => ({ terminalLayout: null })),
