@@ -728,22 +728,31 @@ export function TerminalWorkspace({
         <section className="workspace-body" aria-busy={loading}>
           {loading ? <div className="workspace-placeholder">Opening shell...</div> : null}
           {!loading && !activeTab ? <EmptyWorkspace onCreate={() => void createNewTab()} /> : null}
-          {!loading && activeTab ? (
-            <SplitPane
-              node={activeTab.root}
-              terminals={state.terminals}
-              editors={editors}
-              api={api}
-              activeTerminalId={activeTab.activeTerminalId}
-              refreshCwdOnEnter={effectiveSidebarMode === 'files'}
-              onSelect={(terminalId) => dispatchLayoutChange({ type: 'pane.selected', terminalId })}
-              onClose={(terminalId) => void closeTerminal(terminalId)}
-              onCloseEditor={closeEditorPane}
-              onResize={(path, ratio) => dispatchLayoutChange({ type: 'pane.resized', path, ratio })}
-              onExit={(terminalId, exitCode) => dispatchTerminalState({ type: 'terminal.exited', terminalId, exitCode })}
-              onSnapshot={(terminal) => dispatchTerminalState({ type: 'terminal.updated', terminal })}
-            />
-          ) : null}
+          {!loading
+            ? state.workspaces.flatMap((workspace) =>
+                workspace.tabs.map((tab) => {
+                  const current = workspace.id === activeWorkspace?.id && tab.id === activeTab?.id;
+                  return (
+                    <div key={tab.id} className="workspace-tab-layer" data-current={current} aria-hidden={!current}>
+                      <SplitPane
+                        node={tab.root}
+                        terminals={state.terminals}
+                        editors={editors}
+                        api={api}
+                        activeTerminalId={current ? tab.activeTerminalId : ''}
+                        refreshCwdOnEnter={current && effectiveSidebarMode === 'files'}
+                        onSelect={(terminalId) => dispatchLayoutChange({ type: 'pane.selected', terminalId })}
+                        onClose={(terminalId) => void closeTerminal(terminalId)}
+                        onCloseEditor={closeEditorPane}
+                        onResize={(path, ratio) => dispatchLayoutChange({ type: 'pane.resized', path, ratio })}
+                        onExit={(terminalId, exitCode) => dispatchTerminalState({ type: 'terminal.exited', terminalId, exitCode })}
+                        onSnapshot={(terminal) => dispatchTerminalState({ type: 'terminal.updated', terminal })}
+                      />
+                    </div>
+                  );
+                })
+              )
+            : null}
         </section>
         {activeWorkspace && activeTab ? (
           <StatusBar
