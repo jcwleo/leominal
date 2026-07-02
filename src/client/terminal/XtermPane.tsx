@@ -51,7 +51,13 @@ export function XtermPane({ terminal, active, canClose, refreshCwdOnEnter = fals
   }, [refreshCwdOnEnter]);
 
   useEffect(() => {
-    if (active && terminal.status === 'running') {
+    if (!active) {
+      // Hidden tab layers keep layout (visibility:hidden), so the browser does not move focus off
+      // an invisible pane's textarea — release it so keystrokes cannot reach a background PTY.
+      xtermRef.current?.blur();
+      return;
+    }
+    if (terminal.status === 'running') {
       focusTerminal();
     }
   }, [active, terminal.status]);
@@ -257,12 +263,14 @@ export function XtermPane({ terminal, active, canClose, refreshCwdOnEnter = fals
       if (!xterm) {
         return;
       }
-      scheduleSettledFitAndReportSize();
-      xterm.clear();
-      for (const chunk of message.output) {
-        xterm.write(chunk);
+      // Fits scheduled before the snapshot (socket open, viewport events) must not resize the
+      // terminal away from the server dims while the async restore write is still parsing.
+      clearScheduledFit();
+      xterm.reset();
+      if (message.terminal.cols > 0 && message.terminal.rows > 0) {
+        xterm.resize(message.terminal.cols, message.terminal.rows);
       }
-      scheduleSettledFitAndReportSize();
+      xterm.write(message.output.join(''), () => scheduleSettledFitAndReportSize());
       return;
     }
 

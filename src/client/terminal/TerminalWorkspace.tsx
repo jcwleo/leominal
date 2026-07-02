@@ -69,6 +69,10 @@ export function TerminalWorkspace({
   const pendingLayoutSaveRef = useRef<TerminalLayoutState | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const mountedRef = useRef(false);
+  // Layer keys (`${workspaceId}:${tabId}`) of tabs that have been current at least once.
+  // A visited tab's layer stays mounted permanently; closed tabs leave stale keys behind,
+  // which is harmless because their layers are no longer rendered.
+  const visitedTabLayersRef = useRef(new Set<string>());
 
   const activeWorkspace = state.workspaces.find((workspace) => workspace.id === state.activeWorkspaceId) ?? state.workspaces[0];
   const activeTab = activeWorkspace?.tabs.find((tab) => tab.id === activeWorkspace.activeTabId) ?? activeWorkspace?.tabs[0];
@@ -516,6 +520,15 @@ export function TerminalWorkspace({
   const showSidebarDetails = !sidebarCollapsed || sidebarOpen;
   const effectiveSidebarMode = showSidebarDetails ? sidebarMode : 'workspaces';
 
+  // Loop-invariant SplitPane handlers, hoisted so the per-tab layer map allocates
+  // five closures per render instead of five per visited tab.
+  const handlePaneSelect = (terminalId: TerminalId) => dispatchLayoutChange({ type: 'pane.selected', terminalId });
+  const handlePaneClose = (terminalId: TerminalId) => void closeTerminal(terminalId);
+  const handlePaneResize = (path: number[], ratio: number) => dispatchLayoutChange({ type: 'pane.resized', path, ratio });
+  const handlePaneExit = (terminalId: TerminalId, exitCode: number | null) =>
+    dispatchTerminalState({ type: 'terminal.exited', terminalId, exitCode });
+  const handlePaneSnapshot = (terminal: TerminalSummary) => dispatchTerminalState({ type: 'terminal.updated', terminal });
+
   return (
     <main
       className="terminal-shell"
@@ -728,22 +741,47 @@ export function TerminalWorkspace({
         <section className="workspace-body" aria-busy={loading}>
           {loading ? <div className="workspace-placeholder">Opening shell...</div> : null}
           {!loading && !activeTab ? <EmptyWorkspace onCreate={() => void createNewTab()} /> : null}
-          {!loading && activeTab ? (
-            <SplitPane
-              node={activeTab.root}
-              terminals={state.terminals}
-              editors={editors}
-              api={api}
-              activeTerminalId={activeTab.activeTerminalId}
-              refreshCwdOnEnter={effectiveSidebarMode === 'files'}
-              onSelect={(terminalId) => dispatchLayoutChange({ type: 'pane.selected', terminalId })}
-              onClose={(terminalId) => void closeTerminal(terminalId)}
-              onCloseEditor={closeEditorPane}
-              onResize={(path, ratio) => dispatchLayoutChange({ type: 'pane.resized', path, ratio })}
-              onExit={(terminalId, exitCode) => dispatchTerminalState({ type: 'terminal.exited', terminalId, exitCode })}
-              onSnapshot={(terminal) => dispatchTerminalState({ type: 'terminal.updated', terminal })}
-            />
-          ) : null}
+          {!loading
+            ? state.workspaces.flatMap((workspace) =>
+                workspace.tabs.map((tab) => {
+                  // Composite key: tab ids alone can collide across workspaces in
+                  // corrupt or hand-edited persisted layouts.
+                  const layerKey = `${workspace.id}:${tab.id}`;
+                  const current = workspace.id === activeWorkspace?.id && tab.id === activeTab?.id;
+                  if (current) {
+                    // Deliberate idempotent ref mutation during render (StrictMode-safe):
+                    // the re-render triggered by the active-tab change is what first
+                    // marks a layer as visited, so no extra state or effect is needed.
+                    visitedTabLayersRef.current.add(layerKey);
+                  }
+                  if (!visitedTabLayersRef.current.has(layerKey)) {
+                    // Never-visited tabs render no layer at all, so first load only
+                    // connects the active tab's terminals.
+                    return null;
+                  }
+                  return (
+                    <div key={layerKey} className="workspace-tab-layer" data-current={current} aria-hidden={!current}>
+                      <SplitPane
+                        node={tab.root}
+                        terminals={state.terminals}
+                        editors={editors}
+                        api={api}
+                        // '' means "no active pane in this layer": non-current layers
+                        // stay mounted but must not claim the active terminal.
+                        activeTerminalId={current ? tab.activeTerminalId : ''}
+                        refreshCwdOnEnter={current && effectiveSidebarMode === 'files'}
+                        onSelect={handlePaneSelect}
+                        onClose={handlePaneClose}
+                        onCloseEditor={closeEditorPane}
+                        onResize={handlePaneResize}
+                        onExit={handlePaneExit}
+                        onSnapshot={handlePaneSnapshot}
+                      />
+                    </div>
+                  );
+                })
+              )
+            : null}
         </section>
         {activeWorkspace && activeTab ? (
           <StatusBar

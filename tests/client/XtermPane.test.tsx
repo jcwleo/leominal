@@ -11,10 +11,13 @@ const xtermMocks = vi.hoisted(() => ({
     rows: number;
     open: ReturnType<typeof vi.fn>;
     clear: ReturnType<typeof vi.fn>;
+    reset: ReturnType<typeof vi.fn>;
+    resize: ReturnType<typeof vi.fn>;
     write: ReturnType<typeof vi.fn>;
     writeln: ReturnType<typeof vi.fn>;
     refresh: ReturnType<typeof vi.fn>;
     focus: ReturnType<typeof vi.fn>;
+    blur: ReturnType<typeof vi.fn>;
     scrollLines: ReturnType<typeof vi.fn>;
     dispose: ReturnType<typeof vi.fn>;
     options: Record<string, unknown>;
@@ -43,10 +46,13 @@ vi.mock('@xterm/xterm', () => ({
     rows = xtermMocks.nextSize.rows;
     options: Record<string, unknown>;
     clear = vi.fn();
+    reset = vi.fn();
+    resize = vi.fn();
     write = vi.fn();
     writeln = vi.fn();
     refresh = vi.fn();
     focus = vi.fn();
+    blur = vi.fn();
     scrollLines = vi.fn();
     dispose = vi.fn();
     element: HTMLElement | undefined;
@@ -264,6 +270,169 @@ describe('XtermPane', () => {
     socket.receive({ type: 'terminal_updated', terminal: updated });
 
     expect(onSnapshot).toHaveBeenCalledWith(updated);
+  });
+
+  it('blurs the terminal when the pane becomes inactive', async () => {
+    const paneProps = (active: boolean) => (
+      <XtermPane
+        terminal={terminal()}
+        active={active}
+        onSelect={() => undefined}
+        onExit={() => undefined}
+        onSnapshot={vi.fn()}
+        canClose={false}
+        onClose={() => undefined}
+      />
+    );
+    const { rerender } = render(paneProps(true));
+    await openSocketAfterXtermReady();
+    const mockTerminal = xtermMocks.terminals[0];
+    expect(mockTerminal!.focus).toHaveBeenCalled();
+
+    rerender(paneProps(false));
+
+    expect(mockTerminal!.blur).toHaveBeenCalledOnce();
+  });
+
+  it('resets and pre-resizes to server dimensions before writing snapshot output', async () => {
+    renderPane();
+    const socket = await openSocketAfterXtermReady();
+    const mockTerminal = xtermMocks.terminals[0];
+
+    socket.receive({
+      type: 'snapshot',
+      terminal: { ...terminal(), cols: 120, rows: 40 },
+      output: ['SERIALIZED']
+    });
+
+    expect(mockTerminal!.reset).toHaveBeenCalledOnce();
+    expect(mockTerminal!.clear).not.toHaveBeenCalled();
+    expect(mockTerminal!.resize).toHaveBeenCalledWith(120, 40);
+    expect(mockTerminal!.write).toHaveBeenCalledWith('SERIALIZED', expect.any(Function));
+    const resetOrder = mockTerminal!.reset.mock.invocationCallOrder[0] as number;
+    const resizeOrder = mockTerminal!.resize.mock.invocationCallOrder[0] as number;
+    const writeOrder = mockTerminal!.write.mock.invocationCallOrder[0] as number;
+    expect(resetOrder).toBeLessThan(resizeOrder);
+    expect(resizeOrder).toBeLessThan(writeOrder);
+  });
+
+  it('skips the snapshot pre-resize but still resets and writes when server dimensions are invalid', async () => {
+    renderPane();
+    const socket = await openSocketAfterXtermReady();
+    const mockTerminal = xtermMocks.terminals[0];
+
+    socket.receive({
+      type: 'snapshot',
+      terminal: { ...terminal(), cols: 0, rows: 40 },
+      output: ['SERIALIZED']
+    });
+
+    expect(mockTerminal!.resize).not.toHaveBeenCalled();
+    expect(mockTerminal!.reset).toHaveBeenCalledOnce();
+    expect(mockTerminal!.write).toHaveBeenCalledWith('SERIALIZED', expect.any(Function));
+  });
+
+  it('skips the snapshot pre-resize but still resets and writes when server rows are invalid', async () => {
+    renderPane();
+    const socket = await openSocketAfterXtermReady();
+    const mockTerminal = xtermMocks.terminals[0];
+
+    socket.receive({
+      type: 'snapshot',
+      terminal: { ...terminal(), cols: 120, rows: 0 },
+      output: ['SERIALIZED']
+    });
+
+    expect(mockTerminal!.resize).not.toHaveBeenCalled();
+    expect(mockTerminal!.reset).toHaveBeenCalledOnce();
+    expect(mockTerminal!.write).toHaveBeenCalledWith('SERIALIZED', expect.any(Function));
+  });
+
+  it('defers post-snapshot fit scheduling until the last snapshot write completes', async () => {
+    renderPane();
+    const socket = await openSocketAfterXtermReady();
+    const mockTerminal = xtermMocks.terminals[0];
+
+    await waitFor(() => expect(resizeMessages([socket])).toHaveLength(1));
+    await new Promise((resolve) => window.setTimeout(resolve, 400));
+    const settledRefreshCount = mockTerminal!.refresh.mock.calls.length;
+
+    vi.useFakeTimers();
+    socket.receive({
+      type: 'snapshot',
+      terminal: { ...terminal(), cols: 120, rows: 40 },
+      output: ['CHUNK-ONE', 'CHUNK-TWO']
+    });
+
+    expect(mockTerminal!.write.mock.calls.map((call) => call[0])).toEqual(['CHUNK-ONECHUNK-TWO']);
+    const resetOrder = mockTerminal!.reset.mock.invocationCallOrder[0] as number;
+    const resizeOrder = mockTerminal!.resize.mock.invocationCallOrder[0] as number;
+    const firstWriteOrder = mockTerminal!.write.mock.invocationCallOrder[0] as number;
+    expect(resetOrder).toBeLessThan(resizeOrder);
+    expect(resizeOrder).toBeLessThan(firstWriteOrder);
+
+    await vi.advanceTimersByTimeAsync(350);
+    expect(mockTerminal!.refresh.mock.calls.length).toBe(settledRefreshCount);
+
+    const lastWriteCallback = mockTerminal!.write.mock.calls.at(-1)?.[1] as (() => void) | undefined;
+    expect(lastWriteCallback).toBeTypeOf('function');
+    lastWriteCallback?.();
+    await vi.advanceTimersByTimeAsync(350);
+    expect(mockTerminal!.refresh.mock.calls.length).toBeGreaterThan(settledRefreshCount);
+    vi.useRealTimers();
+  });
+
+  it('cancels fit timers scheduled before the snapshot so none fire during the restore', async () => {
+    renderPane();
+    const socket = await openSocketAfterXtermReady();
+    const mockTerminal = xtermMocks.terminals[0];
+
+    await waitFor(() => expect(resizeMessages([socket])).toHaveLength(1));
+    await new Promise((resolve) => window.setTimeout(resolve, 400));
+    const settledRefreshCount = mockTerminal!.refresh.mock.calls.length;
+
+    vi.useFakeTimers();
+    window.dispatchEvent(new Event('resize'));
+    socket.receive({
+      type: 'snapshot',
+      terminal: { ...terminal(), cols: 120, rows: 40 },
+      output: ['SERIALIZED']
+    });
+
+    await vi.advanceTimersByTimeAsync(350);
+    expect(mockTerminal!.refresh.mock.calls.length).toBe(settledRefreshCount);
+
+    const lastWriteCallback = mockTerminal!.write.mock.calls.at(-1)?.[1] as (() => void) | undefined;
+    expect(lastWriteCallback).toBeTypeOf('function');
+    lastWriteCallback?.();
+    await vi.advanceTimersByTimeAsync(350);
+    expect(mockTerminal!.refresh.mock.calls.length).toBeGreaterThan(settledRefreshCount);
+    vi.useRealTimers();
+  });
+
+  it('schedules the settled fit once the empty snapshot write completes', async () => {
+    renderPane();
+    const socket = await openSocketAfterXtermReady();
+    const mockTerminal = xtermMocks.terminals[0];
+
+    await waitFor(() => expect(resizeMessages([socket])).toHaveLength(1));
+    await new Promise((resolve) => window.setTimeout(resolve, 400));
+    const settledRefreshCount = mockTerminal!.refresh.mock.calls.length;
+
+    vi.useFakeTimers();
+    socket.receive({
+      type: 'snapshot',
+      terminal: { ...terminal(), cols: 120, rows: 40 },
+      output: []
+    });
+
+    expect(mockTerminal!.reset).toHaveBeenCalledOnce();
+    expect(mockTerminal!.write).toHaveBeenCalledWith('', expect.any(Function));
+    const writeCallback = mockTerminal!.write.mock.calls.at(-1)?.[1] as (() => void) | undefined;
+    writeCallback?.();
+    await vi.advanceTimersByTimeAsync(350);
+    expect(mockTerminal!.refresh.mock.calls.length).toBeGreaterThan(settledRefreshCount);
+    vi.useRealTimers();
   });
 
   it('does not resend unchanged resize dimensions for duplicate fit events', async () => {

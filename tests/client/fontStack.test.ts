@@ -18,6 +18,24 @@ describe('terminal font stack', () => {
     expect(terminalFontFamily.indexOf('"MesloLGS NF"')).toBeLessThan(terminalFontFamily.indexOf('monospace'));
   });
 
+  it('leaves text-default symbols like U+23FA to browser text-presentation fallback', () => {
+    // Listing a color-emoji font would capture symbols missing from the bundled
+    // fonts (⏺ ⏸ ⏹) and render them as emoji buttons that ignore ANSI colors.
+    expect(terminalFontFamily).not.toContain('Apple Color Emoji');
+  });
+
+  it('pins STIX Two Math before monospace so ⏺ ⏸ ⏹ match iTerm2 on Apple platforms', () => {
+    // CoreText (iTerm2) and Blink both fall back to STIX Two Math for U+23FA;
+    // listing it explicitly makes WebKit deterministic too instead of relying
+    // on its emoji-leaning automatic fallback.
+    expect(terminalFontFamily.indexOf('"STIX Two Math"')).toBeGreaterThan(
+      terminalFontFamily.indexOf('"Apple Symbols"')
+    );
+    expect(terminalFontFamily.indexOf('"STIX Two Math"')).toBeLessThan(
+      terminalFontFamily.indexOf('monospace')
+    );
+  });
+
   it('requests terminal web fonts before xterm measures cell dimensions', async () => {
     const load = vi.fn().mockResolvedValue([]);
     Object.defineProperty(document, 'fonts', {

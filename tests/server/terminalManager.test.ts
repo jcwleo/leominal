@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import headlessPkg from '@xterm/headless';
 import type { AppConfig } from '../../src/server/config.js';
 import type { Disposable, PtyAdapter, PtyExit, PtyProcess, PtySpawnOptions } from '../../src/server/terminal/PtyAdapter.js';
 import { TerminalManager } from '../../src/server/terminal/TerminalManager.js';
+
+const { Terminal: HeadlessTerminalCtor } = headlessPkg;
+const mirrorOverflowError = () => new Error('write data discarded, use flow control to avoid losing data');
 
 function testConfig(): AppConfig {
   return {
@@ -106,6 +110,16 @@ describe('TerminalManager', () => {
     expect(manager.listTerminals()).toEqual([terminal]);
   });
 
+  it('clamps oversized creation dimensions before allocating the pty and mirror', async () => {
+    const adapter = new FakePtyAdapter();
+    const manager = new TerminalManager(testConfig(), adapter);
+
+    const terminal = await manager.createTerminal({ cols: 999_999, rows: 888_888 });
+
+    expect(adapter.spawns[0]).toMatchObject({ cols: 2000, rows: 1000 });
+    expect(terminal).toMatchObject({ cols: 2000, rows: 1000 });
+  });
+
   it('does not pass Leominal auth secrets into spawned PTY environments', async () => {
     const previousSessionSecret = process.env.LEOMINAL_SESSION_SECRET;
     process.env.LEOMINAL_SESSION_SECRET = 'do-not-pass-session';
@@ -164,7 +178,7 @@ describe('TerminalManager', () => {
     }
   });
 
-  it('replays buffered output on attach and keeps PTYs alive after detach', async () => {
+  it('replays a serialized screen snapshot on attach and keeps PTYs alive after detach', async () => {
     const adapter = new FakePtyAdapter();
     const manager = new TerminalManager(testConfig(), adapter);
     const terminal = await manager.createTerminal();
@@ -173,7 +187,7 @@ describe('TerminalManager', () => {
     pty.emitData('first');
 
     const firstOutput: string[] = [];
-    const firstAttach = manager.attachTerminal(terminal.id, (message) => {
+    const firstAttach = await manager.attachTerminal(terminal.id, (message) => {
       if (message.type === 'output') {
         firstOutput.push(message.data);
       }
@@ -184,15 +198,210 @@ describe('TerminalManager', () => {
     pty.emitData('third');
 
     const secondOutput: string[] = [];
-    manager.attachTerminal(terminal.id, (message) => {
+    await manager.attachTerminal(terminal.id, (message) => {
       if (message.type === 'output') {
         secondOutput.push(message.data);
       }
     });
 
-    expect(firstOutput).toEqual(['first', 'second']);
-    expect(secondOutput).toEqual(['first', 'second', 'third']);
+    expect(firstOutput).toHaveLength(2);
+    expect(firstOutput[0]).toContain('first');
+    expect(firstOutput[1]).toBe('second');
+    expect(secondOutput).toHaveLength(1);
+    expect(secondOutput[0]).toContain('firstsecondthird');
     expect(pty.killed).toBe(false);
+  });
+
+  it('reconstructs the full screen on attach after a repaint scrolls past 500 sparse update chunks', async () => {
+    const adapter = new FakePtyAdapter();
+    const manager = new TerminalManager(testConfig(), adapter);
+    const terminal = await manager.createTerminal({ cols: 80, rows: 24 });
+    const pty = adapter.processes[0]!;
+
+    pty.emitData('\x1b[2J\x1b[H');
+    for (let row = 1; row <= 24; row += 1) {
+      pty.emitData(`\x1b[${row};1Hrow-${row}-content`);
+    }
+    for (let tick = 0; tick < 600; tick += 1) {
+      pty.emitData(`\x1b[2;1Htick-${tick}`);
+    }
+
+    const attachment = await manager.attachTerminal(terminal.id, () => undefined, { replay: false });
+
+    expect(attachment).not.toBeNull();
+    const snapshot = attachment!.output.join('');
+    expect(snapshot).toContain('row-10-content');
+    expect(snapshot).toContain('row-24-content');
+    expect(snapshot).toContain('tick-599');
+  });
+
+  it('serves the final serialized screen when attaching to an exited terminal', async () => {
+    const adapter = new FakePtyAdapter();
+    const manager = new TerminalManager(testConfig(), adapter);
+    const terminal = await manager.createTerminal({ cols: 80, rows: 24 });
+    const pty = adapter.processes[0]!;
+
+    pty.emitData('final-screen-content');
+    pty.emitExit(0);
+
+    const attachment = await manager.attachTerminal(terminal.id, () => undefined, { replay: false });
+
+    expect(attachment).not.toBeNull();
+    expect(attachment!.terminal.status).toBe('exited');
+    expect(attachment!.output.join('')).toContain('final-screen-content');
+  });
+
+  it('keeps the mirror dimensions in sync with resizes so snapshots reflect the new geometry', async () => {
+    const adapter = new FakePtyAdapter();
+    const manager = new TerminalManager(testConfig(), adapter);
+    const terminal = await manager.createTerminal({ cols: 80, rows: 24 });
+    const pty = adapter.processes[0]!;
+
+    manager.resizeTerminal(terminal.id, 20, 24);
+    // Cursor addressed past the new right edge: a 20-col mirror clamps to col 20 (19 cells forward),
+    // while a stale 80-col mirror would place it at col 30 (29 cells forward).
+    pty.emitData('\x1b[1;30HX');
+
+    const attachment = await manager.attachTerminal(terminal.id, () => undefined, { replay: false });
+
+    const snapshot = attachment!.output.join('');
+    expect(snapshot).toContain('\x1b[19CX');
+    expect(snapshot).not.toContain('\x1b[29CX');
+  });
+
+  it('drops mirror writes without crashing and keeps publishing live output when the mirror overflows', async () => {
+    const adapter = new FakePtyAdapter();
+    const manager = new TerminalManager(testConfig(), adapter);
+    const terminal = await manager.createTerminal();
+    const pty = adapter.processes[0]!;
+    const received: string[] = [];
+    await manager.attachTerminal(
+      terminal.id,
+      (message) => {
+        if (message.type === 'output') {
+          received.push(message.data);
+        }
+      },
+      { replay: false }
+    );
+    const writeSpy = vi.spyOn(HeadlessTerminalCtor.prototype, 'write');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      writeSpy
+        .mockImplementationOnce(() => {
+          throw mirrorOverflowError();
+        })
+        .mockImplementationOnce(() => {
+          throw mirrorOverflowError();
+        });
+
+      expect(() => pty.emitData('dropped-1')).not.toThrow();
+      expect(() => pty.emitData('dropped-2')).not.toThrow();
+      pty.emitData('recovered');
+
+      expect(received).toEqual(['dropped-1', 'dropped-2', 'recovered']);
+      // One log per overflow episode, not per dropped chunk.
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      writeSpy.mockImplementationOnce(() => {
+        throw mirrorOverflowError();
+      });
+      pty.emitData('dropped-3');
+      expect(errorSpy).toHaveBeenCalledTimes(2);
+
+      const attachment = await manager.attachTerminal(terminal.id, () => undefined, { replay: false });
+      expect(attachment).not.toBeNull();
+      const snapshot = attachment!.output.join('');
+      expect(snapshot).toContain('recovered');
+      expect(snapshot).not.toContain('dropped-1');
+    } finally {
+      writeSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('still returns a snapshot when the attach flush write overflows the mirror', async () => {
+    const adapter = new FakePtyAdapter();
+    const manager = new TerminalManager(testConfig(), adapter);
+    const terminal = await manager.createTerminal();
+    const pty = adapter.processes[0]!;
+    pty.emitData('kept-content');
+    const first = await manager.attachTerminal(terminal.id, () => undefined, { replay: false });
+    first!.dispose();
+
+    const writeSpy = vi.spyOn(HeadlessTerminalCtor.prototype, 'write');
+    try {
+      writeSpy.mockImplementationOnce(() => {
+        throw mirrorOverflowError();
+      });
+      const received: string[] = [];
+      const attachment = await manager.attachTerminal(
+        terminal.id,
+        (message) => {
+          if (message.type === 'output') {
+            received.push(message.data);
+          }
+        },
+        { replay: false }
+      );
+
+      expect(attachment).not.toBeNull();
+      expect(attachment!.output.join('')).toContain('kept-content');
+      pty.emitData('live-after-overflow');
+      expect(received).toEqual(['live-after-overflow']);
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
+  it('delivers chunks that arrive during the attach flush exactly once', async () => {
+    const adapter = new FakePtyAdapter();
+    const manager = new TerminalManager(testConfig(), adapter);
+    const terminal = await manager.createTerminal({ cols: 80, rows: 24 });
+    const pty = adapter.processes[0]!;
+
+    pty.emitData('before-attach\r\n');
+    const live: string[] = [];
+    const attachPromise = manager.attachTerminal(
+      terminal.id,
+      (message) => {
+        if (message.type === 'output') {
+          live.push(message.data);
+        }
+      },
+      { replay: false }
+    );
+    // Chunks arriving during the flush window. The big chunk forces xterm's 12ms parse budget to
+    // break the write batch between the flush sentinel and the marker, exposing snapshot/live races.
+    pty.emitData(`${'x'.repeat(8_000_000)}\r\n`);
+    pty.emitData('during-marker');
+    const attachment = await attachPromise;
+    pty.emitData('post-attach');
+
+    expect(attachment).not.toBeNull();
+    const snapshot = attachment!.output.join('');
+    const liveData = live.join('');
+    expect(countOccurrences(snapshot, 'during-marker') + countOccurrences(liveData, 'during-marker')).toBe(1);
+    expect(countOccurrences(snapshot, 'post-attach') + countOccurrences(liveData, 'post-attach')).toBe(1);
+    expect(snapshot).toContain('before-attach');
+  });
+
+  it('bounds oversized attach snapshots by reducing serialized scrollback', async () => {
+    const adapter = new FakePtyAdapter();
+    const manager = new TerminalManager(testConfig(), adapter, { maxSnapshotLength: 4096 });
+    const terminal = await manager.createTerminal({ cols: 80, rows: 24 });
+    const pty = adapter.processes[0]!;
+    for (let line = 0; line < 2000; line += 1) {
+      pty.emitData(`\x1b[38;5;${(line % 200) + 16}mscroll-line-${String(line).padStart(4, '0')}\x1b[0m\r\n`);
+    }
+
+    const attachment = await manager.attachTerminal(terminal.id, () => undefined, { replay: false });
+
+    expect(attachment).not.toBeNull();
+    const snapshot = attachment!.output.join('');
+    expect(snapshot).toContain('scroll-line-1999');
+    expect(snapshot).not.toContain('scroll-line-0100');
+    expect(snapshot.length).toBeLessThanOrEqual(4096);
   });
 
   it('routes input and resize to the PTY', async () => {
@@ -209,12 +418,24 @@ describe('TerminalManager', () => {
     expect(manager.getTerminal(terminal.id)).toMatchObject({ cols: 100, rows: 40 });
   });
 
+  it('clamps resize dimensions to safe bounds', async () => {
+    const adapter = new FakePtyAdapter();
+    const manager = new TerminalManager(testConfig(), adapter);
+    const terminal = await manager.createTerminal();
+    const pty = adapter.processes[0]!;
+
+    expect(manager.resizeTerminal(terminal.id, 999_999, 999_999)).toBe(true);
+
+    expect(pty.resizes).toEqual([{ cols: 2000, rows: 1000 }]);
+    expect(manager.getTerminal(terminal.id)).toMatchObject({ cols: 2000, rows: 1000 });
+  });
+
   it('publishes terminal updates only when resize changes the PTY size', async () => {
     const adapter = new FakePtyAdapter();
     const manager = new TerminalManager(testConfig(), adapter);
     const terminal = await manager.createTerminal();
     const messages: unknown[] = [];
-    manager.attachTerminal(terminal.id, (message) => messages.push(message), { replay: false });
+    await manager.attachTerminal(terminal.id, (message) => messages.push(message), { replay: false });
 
     manager.resizeTerminal(terminal.id, 100, 40);
     manager.resizeTerminal(terminal.id, 100, 40);
@@ -228,13 +449,137 @@ describe('TerminalManager', () => {
     ]);
   });
 
+  it('nudges a running terminal with a two-phase rows jiggle so foreground TUIs receive SIGWINCH', async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new FakePtyAdapter();
+      const manager = new TerminalManager(testConfig(), adapter);
+      const terminal = await manager.createTerminal({ cols: 100, rows: 40 });
+      const pty = adapter.processes[0]!;
+
+      expect(manager.nudgeTerminal(terminal.id)).toBe(true);
+
+      // Phase 1 shrinks immediately; the restore happens on a later tick so the two winsize
+      // changes cannot coalesce into a single no-op SIGWINCH.
+      expect(pty.resizes).toEqual([{ cols: 100, rows: 39 }]);
+      expect(manager.getTerminal(terminal.id)).toMatchObject({ cols: 100, rows: 39 });
+
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(pty.resizes).toEqual([
+        { cols: 100, rows: 39 },
+        { cols: 100, rows: 40 }
+      ]);
+      expect(manager.getTerminal(terminal.id)).toMatchObject({ cols: 100, rows: 40 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('skips a new nudge while a nudge restore is still pending', async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new FakePtyAdapter();
+      const manager = new TerminalManager(testConfig(), adapter);
+      const terminal = await manager.createTerminal({ cols: 100, rows: 40 });
+      const pty = adapter.processes[0]!;
+
+      expect(manager.nudgeTerminal(terminal.id)).toBe(true);
+      expect(manager.nudgeTerminal(terminal.id)).toBe(true);
+      expect(pty.resizes).toEqual([{ cols: 100, rows: 39 }]);
+
+      await vi.advanceTimersByTimeAsync(50);
+      expect(pty.resizes).toEqual([
+        { cols: 100, rows: 39 },
+        { cols: 100, rows: 40 }
+      ]);
+
+      await vi.advanceTimersByTimeAsync(50);
+      expect(pty.resizes).toHaveLength(2);
+
+      expect(manager.nudgeTerminal(terminal.id)).toBe(true);
+      expect(pty.resizes).toEqual([
+        { cols: 100, rows: 39 },
+        { cols: 100, rows: 40 },
+        { cols: 100, rows: 39 }
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('skips the nudge restore when another resize lands during the jiggle window', async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new FakePtyAdapter();
+      const manager = new TerminalManager(testConfig(), adapter);
+      const terminal = await manager.createTerminal({ cols: 100, rows: 40 });
+      const pty = adapter.processes[0]!;
+
+      expect(manager.nudgeTerminal(terminal.id)).toBe(true);
+      expect(manager.resizeTerminal(terminal.id, 120, 50)).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(pty.resizes).toEqual([
+        { cols: 100, rows: 39 },
+        { cols: 120, rows: 50 }
+      ]);
+      expect(manager.getTerminal(terminal.id)).toMatchObject({ cols: 120, rows: 50 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not run the nudge restore after the terminal closes', async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new FakePtyAdapter();
+      const manager = new TerminalManager(testConfig(), adapter);
+      const terminal = await manager.createTerminal({ cols: 100, rows: 40 });
+      const pty = adapter.processes[0]!;
+
+      expect(manager.nudgeTerminal(terminal.id)).toBe(true);
+      expect(manager.closeTerminal(terminal.id)).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(pty.resizes).toEqual([{ cols: 100, rows: 39 }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not nudge missing or exited terminals', async () => {
+    const adapter = new FakePtyAdapter();
+    const manager = new TerminalManager(testConfig(), adapter);
+    const terminal = await manager.createTerminal();
+    const pty = adapter.processes[0]!;
+    pty.emitExit(0);
+
+    expect(manager.nudgeTerminal('missing-terminal')).toBe(false);
+    expect(manager.nudgeTerminal(terminal.id)).toBe(false);
+    expect(pty.resizes).toEqual([]);
+  });
+
+  it('does not nudge terminals with fewer than two rows', async () => {
+    const adapter = new FakePtyAdapter();
+    const manager = new TerminalManager(testConfig(), adapter);
+    const terminal = await manager.createTerminal({ cols: 80, rows: 1 });
+    const pty = adapter.processes[0]!;
+
+    expect(manager.nudgeTerminal(terminal.id)).toBe(false);
+    expect(pty.resizes).toEqual([]);
+    expect(manager.getTerminal(terminal.id)).toMatchObject({ cols: 80, rows: 1 });
+  });
+
   it('does not resolve cwd from PTY output alone', async () => {
     const adapter = new FakePtyAdapter();
     const resolveCwd = vi.fn(async () => '/workspace/root/packages/app');
     const manager = new TerminalManager(testConfig(), adapter, { resolveCwd });
     const terminal = await manager.createTerminal();
     const messages: unknown[] = [];
-    manager.attachTerminal(terminal.id, (message) => messages.push(message), { replay: false });
+    await manager.attachTerminal(terminal.id, (message) => messages.push(message), { replay: false });
 
     adapter.processes[0]!.emitData('\r\n% ');
 
@@ -249,7 +594,7 @@ describe('TerminalManager', () => {
     const manager = new TerminalManager(testConfig(), adapter, { resolveCwd });
     const terminal = await manager.createTerminal();
     const messages: unknown[] = [];
-    manager.attachTerminal(terminal.id, (message) => messages.push(message), { replay: false });
+    await manager.attachTerminal(terminal.id, (message) => messages.push(message), { replay: false });
 
     await manager.refreshTerminalCwd(terminal.id);
 
@@ -276,7 +621,7 @@ describe('TerminalManager', () => {
     const terminal = await manager.createTerminal();
     const pty = adapter.processes[0]!;
 
-    const attach = manager.attachTerminal(terminal.id, () => undefined);
+    const attach = await manager.attachTerminal(terminal.id, () => undefined);
     expect(attach).not.toBeNull();
     attach?.dispose();
     expect(pty.killed).toBe(false);
@@ -363,6 +708,10 @@ describe('TerminalManager', () => {
     expect(manager.listTerminals()).toEqual([]);
   });
 });
+
+function countOccurrences(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1;
+}
 
 function setOrDeleteEnv(key: string, value: string | undefined): void {
   if (value === undefined) {

@@ -1162,6 +1162,17 @@ textarea {
   background: var(--leo-bg);
 }
 
+.workspace-tab-layer {
+  position: absolute;
+  inset: 0;
+}
+
+/* Hidden layers keep layout (visibility, not display) so xterm fit keeps tracking resizes. */
+.workspace-tab-layer[data-current="false"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .workspace-placeholder,
 .empty-workspace,
 .missing-pane {

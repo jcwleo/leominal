@@ -47,6 +47,8 @@ vi.mock('../../src/client/terminal/SplitPane.js', () => ({
     node,
     terminals = {},
     editors = {},
+    activeTerminalId,
+    refreshCwdOnEnter,
     onClose,
     onCloseEditor,
     onResize,
@@ -56,6 +58,8 @@ vi.mock('../../src/client/terminal/SplitPane.js', () => ({
     node?: import('../../src/shared/types.js').LayoutNode;
     terminals?: Record<string, TerminalSummary>;
     editors?: Record<string, { title: string; read: { content: string } }>;
+    activeTerminalId?: string;
+    refreshCwdOnEnter?: boolean;
     onClose?: (terminalId: string) => void;
     onCloseEditor?: (editorId: string) => void;
     onResize?: (path: number[], ratio: number) => void;
@@ -89,7 +93,11 @@ vi.mock('../../src/client/terminal/SplitPane.js', () => ({
     }
 
     return (
-      <div data-testid="split-pane">
+      <div
+        data-testid="split-pane"
+        data-active-terminal-id={activeTerminalId ?? ''}
+        data-refresh-cwd-on-enter={refreshCwdOnEnter === true}
+      >
         {renderNode(node)}
         <button type="button" onClick={() => onClose?.('term-alpha')}>
           Close pane term-alpha
@@ -275,6 +283,101 @@ function splitLayout(): TerminalLayoutState {
               first: { type: 'pane', terminalId: 'term-alpha' },
               second: { type: 'pane', terminalId: 'term-beta' }
             }
+          }
+        ]
+      }
+    ]
+  };
+}
+
+function twoTabLayout(): TerminalLayoutState {
+  return {
+    activeWorkspaceId: 'workspace-default',
+    workspaces: [
+      {
+        id: 'workspace-default',
+        title: 'Leominal',
+        activeTabId: 'tab-ops',
+        tabs: [
+          {
+            id: 'tab-ops',
+            title: 'Ops',
+            activeTerminalId: 'term-alpha',
+            root: { type: 'pane', terminalId: 'term-alpha' }
+          },
+          {
+            id: 'tab-dev',
+            title: 'Dev',
+            activeTerminalId: 'term-beta',
+            root: { type: 'pane', terminalId: 'term-beta' }
+          }
+        ]
+      }
+    ]
+  };
+}
+
+function twoWorkspaceLayout(): TerminalLayoutState {
+  return {
+    activeWorkspaceId: 'workspace-default',
+    workspaces: [
+      {
+        id: 'workspace-default',
+        title: 'Leominal',
+        activeTabId: 'tab-ops',
+        tabs: [
+          {
+            id: 'tab-ops',
+            title: 'Ops',
+            activeTerminalId: 'term-alpha',
+            root: { type: 'pane', terminalId: 'term-alpha' }
+          }
+        ]
+      },
+      {
+        id: 'workspace-second',
+        title: 'Second',
+        activeTabId: 'tab-second',
+        tabs: [
+          {
+            id: 'tab-second',
+            title: 'Second',
+            activeTerminalId: 'term-beta',
+            root: { type: 'pane', terminalId: 'term-beta' }
+          }
+        ]
+      }
+    ]
+  };
+}
+
+function duplicateTabIdLayout(): TerminalLayoutState {
+  return {
+    activeWorkspaceId: 'workspace-default',
+    workspaces: [
+      {
+        id: 'workspace-default',
+        title: 'Leominal',
+        activeTabId: 'tab-dup',
+        tabs: [
+          {
+            id: 'tab-dup',
+            title: 'Ops',
+            activeTerminalId: 'term-alpha',
+            root: { type: 'pane', terminalId: 'term-alpha' }
+          }
+        ]
+      },
+      {
+        id: 'workspace-second',
+        title: 'Second',
+        activeTabId: 'tab-dup',
+        tabs: [
+          {
+            id: 'tab-dup',
+            title: 'Second',
+            activeTerminalId: 'term-beta',
+            root: { type: 'pane', terminalId: 'term-beta' }
           }
         ]
       }
@@ -551,6 +654,121 @@ describe('TerminalWorkspace', () => {
 
     expect(within(tabs).getByText('Alpha')).toBeVisible();
     expect(within(tabs).queryByText('Created 1')).toBeNull();
+  });
+
+  it('does not mount never-visited tabs on initial load', async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha'), terminal('term-beta', 'Beta')]);
+    vi.mocked(api.getTerminalLayout).mockResolvedValue(serverLayout(twoTabLayout(), 4));
+
+    render(<TerminalWorkspace api={api} />);
+
+    const panes = await screen.findAllByTestId('split-pane');
+    expect(panes).toHaveLength(1);
+    const layer = panes[0]?.closest('.workspace-tab-layer');
+    expect(layer).toHaveAttribute('data-current', 'true');
+    expect(layer).toHaveAttribute('aria-hidden', 'false');
+  });
+
+  it('does not mount a never-visited tab that shares its id with a tab in another workspace', async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha'), terminal('term-beta', 'Beta')]);
+    vi.mocked(api.getTerminalLayout).mockResolvedValue(serverLayout(duplicateTabIdLayout(), 4));
+
+    render(<TerminalWorkspace api={api} />);
+
+    const panes = await screen.findAllByTestId('split-pane');
+    expect(panes).toHaveLength(1);
+    expect(panes[0]).toHaveAttribute('data-active-terminal-id', 'term-alpha');
+  });
+
+  it("mounts a tab's layer on first visit and keeps it mounted after switching away", async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha'), terminal('term-beta', 'Beta')]);
+    vi.mocked(api.getTerminalLayout).mockResolvedValue(serverLayout(twoTabLayout(), 4));
+
+    render(<TerminalWorkspace api={api} />);
+
+    const panesBefore = await screen.findAllByTestId('split-pane');
+    expect(panesBefore).toHaveLength(1);
+
+    const tabs = screen.getByRole('navigation', { name: 'Terminal tabs' });
+    fireEvent.click(within(tabs).getByRole('button', { name: 'Select Dev' }));
+
+    const panesVisited = screen.getAllByTestId('split-pane');
+    expect(panesVisited).toHaveLength(2);
+    expect(panesVisited[0]).toBe(panesBefore[0]);
+    expect(panesVisited.map((pane) => pane.closest('.workspace-tab-layer')?.getAttribute('data-current'))).toEqual([
+      'false',
+      'true'
+    ]);
+
+    fireEvent.click(within(tabs).getByRole('button', { name: 'Select Ops' }));
+
+    const panesAfter = screen.getAllByTestId('split-pane');
+    expect(panesAfter).toHaveLength(2);
+    expect(panesAfter[0]).toBe(panesVisited[0]);
+    expect(panesAfter[1]).toBe(panesVisited[1]);
+    expect(panesAfter.map((pane) => pane.closest('.workspace-tab-layer')?.getAttribute('data-current'))).toEqual([
+      'true',
+      'false'
+    ]);
+    expect(panesAfter.map((pane) => pane.closest('.workspace-tab-layer')?.getAttribute('aria-hidden'))).toEqual([
+      'false',
+      'true'
+    ]);
+  });
+
+  it("mounts a workspace's layer on first visit and keeps it mounted across workspace switches", async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha'), terminal('term-beta', 'Beta')]);
+    vi.mocked(api.getTerminalLayout).mockResolvedValue(serverLayout(twoWorkspaceLayout(), 4));
+
+    render(<TerminalWorkspace api={api} />);
+
+    const panesBefore = await screen.findAllByTestId('split-pane');
+    expect(panesBefore).toHaveLength(1);
+
+    const workspaces = screen.getByRole('navigation', { name: 'Workspaces' });
+    fireEvent.click(within(workspaces).getByRole('button', { name: /^Second/ }));
+
+    const panesVisited = screen.getAllByTestId('split-pane');
+    expect(panesVisited).toHaveLength(2);
+    expect(panesVisited[0]).toBe(panesBefore[0]);
+    expect(panesVisited.map((pane) => pane.closest('.workspace-tab-layer')?.getAttribute('data-current'))).toEqual([
+      'false',
+      'true'
+    ]);
+
+    fireEvent.click(within(workspaces).getByRole('button', { name: /^Leominal/ }));
+
+    const panesAfter = screen.getAllByTestId('split-pane');
+    expect(panesAfter).toHaveLength(2);
+    expect(panesAfter[0]).toBe(panesVisited[0]);
+    expect(panesAfter[1]).toBe(panesVisited[1]);
+    expect(panesAfter.map((pane) => pane.closest('.workspace-tab-layer')?.getAttribute('data-current'))).toEqual([
+      'true',
+      'false'
+    ]);
+  });
+
+  it('scopes the active terminal id and cwd refresh to the current layer', async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha'), terminal('term-beta', 'Beta')]);
+    vi.mocked(api.getTerminalLayout).mockResolvedValue(serverLayout(twoTabLayout(), 4));
+
+    render(<TerminalWorkspace api={api} />);
+
+    await screen.findAllByTestId('split-pane');
+    const tabs = screen.getByRole('navigation', { name: 'Terminal tabs' });
+    fireEvent.click(within(tabs).getByRole('button', { name: 'Select Dev' }));
+    fireEvent.click(within(tabs).getByRole('button', { name: 'Select Ops' }));
+
+    const panes = screen.getAllByTestId('split-pane');
+    expect(panes).toHaveLength(2);
+    expect(panes[0]).toHaveAttribute('data-active-terminal-id', 'term-alpha');
+    expect(panes[1]).toHaveAttribute('data-active-terminal-id', '');
+
+    const sidebarTabs = screen.getByRole('tablist', { name: 'Sidebar mode' });
+    fireEvent.click(within(sidebarTabs).getByRole('tab', { name: 'Files' }));
+
+    await waitFor(() => expect(screen.getAllByTestId('split-pane')[0]).toHaveAttribute('data-refresh-cwd-on-enter', 'true'));
+    expect(screen.getAllByTestId('split-pane')[1]).toHaveAttribute('data-refresh-cwd-on-enter', 'false');
   });
 
   it('renames a workspace from the left rail', async () => {

@@ -130,6 +130,32 @@ function waitForNextTick(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function gatedAttach(manager: TerminalManager): { release: () => void; disposeSpy: ReturnType<typeof vi.fn> } {
+  const originalAttach = manager.attachTerminal.bind(manager);
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const disposeSpy = vi.fn();
+  vi.spyOn(manager, 'attachTerminal').mockImplementation(async (...args) => {
+    await gate;
+    const attachment = await originalAttach(...args);
+    if (attachment) {
+      const originalDispose = attachment.dispose.bind(attachment);
+      attachment.dispose = () => {
+        disposeSpy();
+        originalDispose();
+      };
+    }
+    return attachment;
+  });
+  return { release, disposeSpy };
+}
+
 function waitForClose(socket: WebSocket): Promise<{ code: number; reason: string }> {
   return new Promise((resolve) => {
     socket.once('close', (code, reason) => resolve({ code, reason: reason.toString() }));
@@ -402,13 +428,74 @@ describe('terminal routes', () => {
     socket.close();
     await closePromise;
 
-    expect(snapshot).toMatchObject({ type: 'snapshot', output: ['boot'] });
+    const snapshotMessage = snapshot as { type: string; output: string[] };
+    expect(snapshotMessage.type).toBe('snapshot');
+    expect(snapshotMessage.output).toHaveLength(1);
+    expect(snapshotMessage.output[0]).toContain('boot');
     expect(terminalUpdate).toMatchObject({ type: 'terminal_updated', terminal: { id: terminal.id, cols: 111, rows: 31 } });
     expect(output).toEqual({ type: 'output', terminalId: terminal.id, data: 'live' });
     expect(refreshCwd).toHaveBeenCalledWith(terminal.id);
     expect(adapter.processes[0]!.writes).toEqual(['pwd\r']);
-    expect(adapter.processes[0]!.resizes).toEqual([{ cols: 111, rows: 31 }]);
+    // The nudge restore phase runs on a ~50ms timer, so it may or may not land before the client
+    // resize; assert the jiggle start and the final client size instead of the exact sequence.
+    expect(adapter.processes[0]!.resizes[0]).toEqual({ cols: 80, rows: 23 });
+    expect(adapter.processes[0]!.resizes.at(-1)).toEqual({ cols: 111, rows: 31 });
     expect(adapter.processes[0]!.killed).toBe(false);
+  });
+
+  it('replays input and resize frames that arrive while attach is still pending', async () => {
+    const { app, manager, adapter } = await buildTerminalTestApp(true);
+    openApps.push(app);
+    const terminal = await manager.createTerminal();
+    const { release } = gatedAttach(manager);
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('missing app address');
+    }
+
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/terminals/${terminal.id}/ws`, {
+      headers: { 'x-test-auth': 'yes', origin: 'http://127.0.0.1:3107' }
+    });
+    const snapshotPromise = waitForMessage(socket);
+    await waitForOpen(socket);
+    socket.send(JSON.stringify({ type: 'input', terminalId: terminal.id, data: 'early-input\r' }));
+    socket.send(JSON.stringify({ type: 'resize', terminalId: terminal.id, cols: 90, rows: 30 }));
+    // Let the frames reach the server while attachTerminal is still pending.
+    await delay(75);
+    expect(adapter.processes[0]!.writes).toEqual([]);
+    release();
+    const snapshot = await snapshotPromise;
+    const closePromise = waitForClose(socket);
+    socket.close();
+    await closePromise;
+
+    expect((snapshot as { type: string }).type).toBe('snapshot');
+    expect(adapter.processes[0]!.writes).toEqual(['early-input\r']);
+    expect(adapter.processes[0]!.resizes[0]).toEqual({ cols: 90, rows: 30 });
+  });
+
+  it('disposes the attachment when the socket closes while attach is still pending', async () => {
+    const { app, manager } = await buildTerminalTestApp(true);
+    openApps.push(app);
+    const terminal = await manager.createTerminal();
+    const { release, disposeSpy } = gatedAttach(manager);
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('missing app address');
+    }
+
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/terminals/${terminal.id}/ws`, {
+      headers: { 'x-test-auth': 'yes', origin: 'http://127.0.0.1:3107' }
+    });
+    await waitForOpen(socket);
+    const closePromise = waitForClose(socket);
+    socket.close();
+    await closePromise;
+    release();
+
+    await vi.waitFor(() => expect(disposeSpy).toHaveBeenCalledTimes(1));
   });
 
   it('coalesces same-tick terminal output before sending it over WebSocket', async () => {
@@ -525,7 +612,10 @@ describe('terminal routes', () => {
     socket.close();
     await closePromise;
 
-    expect(snapshot).toMatchObject({ type: 'snapshot', output: ['ready'] });
+    const snapshotMessage = snapshot as { type: string; output: string[] };
+    expect(snapshotMessage.type).toBe('snapshot');
+    expect(snapshotMessage.output).toHaveLength(1);
+    expect(snapshotMessage.output[0]).toContain('ready');
   });
 
   it('closes WebSockets authenticated by sessions revoked during TOTP enrollment', async () => {
