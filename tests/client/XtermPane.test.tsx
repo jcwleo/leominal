@@ -148,9 +148,16 @@ class MockWebSocket extends EventTarget {
     this.sent.push(message);
   }
 
-  close() {
+  close(code?: number, reason?: string) {
     this.readyState = MockWebSocket.CLOSED;
-    this.dispatchEvent(new CloseEvent('close'));
+    const init: CloseEventInit = {};
+    if (code !== undefined) {
+      init.code = code;
+    }
+    if (reason !== undefined) {
+      init.reason = reason;
+    }
+    this.dispatchEvent(new CloseEvent('close', init));
   }
 }
 
@@ -863,5 +870,32 @@ describe('XtermPane', () => {
       />
     );
     expect(screen.queryByRole('toolbar', { name: 'Mobile terminal keys' })).toBeNull();
+  });
+
+  it('stops reconnecting after a policy-violation close and reports the reason', async () => {
+    renderPane();
+    const socket = await openSocketAfterXtermReady();
+    expect(sockets).toHaveLength(1);
+
+    vi.useFakeTimers();
+    socket.close(1008, 'unauthorized');
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(sockets).toHaveLength(1);
+    expect(xtermMocks.terminals[0]?.writeln).toHaveBeenCalledWith(expect.stringContaining('session ended'));
+    vi.useRealTimers();
+  });
+
+  it('reconnects after a transient close that is not a policy violation', async () => {
+    renderPane();
+    const socket = await openSocketAfterXtermReady();
+    expect(sockets).toHaveLength(1);
+
+    vi.useFakeTimers();
+    socket.close(1006);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(sockets).toHaveLength(2);
+    vi.useRealTimers();
   });
 });

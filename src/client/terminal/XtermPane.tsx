@@ -15,6 +15,25 @@ const terminalFitSettleDelaysMs = [0, 50, 150, 350] as const;
 const cwdRefreshDelaysMs = [300, 1_200, 2_500] as const;
 const touchScrollLineHeight = terminalFontSize * 1.2;
 
+// The server rejects unrecoverable conditions (unauthorized, session revoked,
+// terminal gone, disallowed origin) with a policy-violation close. Retrying
+// those just reconnects into the same rejection forever, so we stop instead.
+const terminalPolicyCloseCode = 1008;
+const terminalReconnectBaseDelayMs = 1_000;
+const terminalReconnectMaxDelayMs = 30_000;
+
+function fatalCloseMessage(reason: string): string {
+  switch (reason) {
+    case 'unauthorized':
+    case 'session revoked':
+      return 'session ended — reload the page and sign in again.';
+    case 'terminal not found':
+      return 'this terminal is no longer available (the server may have restarted) — open a new terminal.';
+    default:
+      return reason ? `connection refused by the server: ${reason}.` : 'connection closed by the server.';
+  }
+}
+
 interface XtermPaneProps {
   terminal: TerminalSummary;
   active: boolean;
@@ -169,6 +188,7 @@ export function XtermPane({ terminal, active, canClose, refreshCwdOnEnter = fals
   useEffect(() => {
     let disposed = false;
     let reconnectTimer: number | null = null;
+    let reconnectAttempt = 0;
 
     function connect() {
       if (disposed || !reconnectEnabledRef.current) {
@@ -179,6 +199,7 @@ export function XtermPane({ terminal, active, canClose, refreshCwdOnEnter = fals
       socketRef.current = socket;
 
       socket.addEventListener('open', () => {
+        reconnectAttempt = 0;
         setConnectionStatus('connected');
         scheduleSettledFitAndReportSize();
       });
@@ -191,7 +212,7 @@ export function XtermPane({ terminal, active, canClose, refreshCwdOnEnter = fals
         handleServerMessage(message);
       });
 
-      socket.addEventListener('close', () => {
+      socket.addEventListener('close', (event) => {
         if (socketRef.current === socket) {
           socketRef.current = null;
         }
@@ -199,8 +220,16 @@ export function XtermPane({ terminal, active, canClose, refreshCwdOnEnter = fals
           setConnectionStatus('closed');
           return;
         }
+        if (event.code === terminalPolicyCloseCode) {
+          reconnectEnabledRef.current = false;
+          setConnectionStatus('closed');
+          xtermRef.current?.writeln(`\r\n[leominal] ${fatalCloseMessage(event.reason)}`);
+          return;
+        }
         setConnectionStatus('reconnecting');
-        reconnectTimer = window.setTimeout(connect, 1_000);
+        const delay = Math.min(terminalReconnectMaxDelayMs, terminalReconnectBaseDelayMs * 2 ** reconnectAttempt);
+        reconnectAttempt += 1;
+        reconnectTimer = window.setTimeout(connect, delay);
       });
 
       socket.addEventListener('error', () => {
