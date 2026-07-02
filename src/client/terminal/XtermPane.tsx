@@ -51,7 +51,13 @@ export function XtermPane({ terminal, active, canClose, refreshCwdOnEnter = fals
   }, [refreshCwdOnEnter]);
 
   useEffect(() => {
-    if (active && terminal.status === 'running') {
+    if (!active) {
+      // Hidden tab layers keep layout (visibility:hidden), so the browser does not move focus off
+      // an invisible pane's textarea — release it so keystrokes cannot reach a background PTY.
+      xtermRef.current?.blur();
+      return;
+    }
+    if (terminal.status === 'running') {
       focusTerminal();
     }
   }, [active, terminal.status]);

@@ -79,6 +79,52 @@ test('browser UI unlocks with the stored password on a returning visit', async (
   await waitForWorkspace(page);
 });
 
+test('browser UI keeps tab panes alive across tab switches without reconnecting', async ({ page }) => {
+  const terminalSocketUrls: string[] = [];
+  page.on('websocket', (socket) => {
+    if (socket.url().includes('/api/terminals/')) {
+      terminalSocketUrls.push(socket.url());
+    }
+  });
+
+  await page.goto('/');
+  await unlockPageWithPassword(page);
+  await waitForWorkspace(page);
+  await expect(page.locator('.workspace-tab-layer[data-current="true"] .xterm-container')).toBeVisible();
+
+  const firstTabRows = page.locator('.workspace-tab-layer[data-current="true"] .xterm-rows');
+  await page.locator('.workspace-tab-layer[data-current="true"] .xterm-container').click();
+  await page.keyboard.type('echo tab-persist-marker');
+  await page.keyboard.press('Enter');
+  await expect(firstTabRows).toContainText('tab-persist-marker');
+  const socketsAfterFirstTab = terminalSocketUrls.length;
+
+  const terminalTabs = page.getByRole('navigation', { name: 'Terminal tabs' });
+  await terminalTabs.getByRole('button', { name: 'New tab' }).click();
+  await expect(terminalTabs.getByRole('button', { name: /^Select / })).toHaveCount(2);
+  await expect(page.locator('.workspace-tab-layer')).toHaveCount(2);
+
+  // The first tab's layer stays mounted but must be hidden and non-current.
+  const hiddenLayer = page.locator('.workspace-tab-layer[data-current="false"]');
+  await expect(hiddenLayer).toHaveCount(1);
+  await expect(hiddenLayer.locator('.xterm-container')).toBeHidden();
+  // Focus must follow the switch: the active element belongs to the current layer.
+  await expect
+    .poll(() =>
+      page.evaluate(() => document.activeElement?.closest('.workspace-tab-layer')?.getAttribute('data-current') ?? 'none')
+    )
+    .toBe('true');
+
+  await terminalTabs.getByRole('button', { name: /^Select / }).first().click();
+  // Instant switch-back: the marker is already rendered — no reconnect, no snapshot restore.
+  await expect(page.locator('.workspace-tab-layer[data-current="true"] .xterm-rows')).toContainText('tab-persist-marker');
+  expect(terminalSocketUrls.length).toBe(socketsAfterFirstTab + 1);
+
+  await terminalTabs.getByRole('button', { name: /^Close / }).nth(1).click();
+  await expect(terminalTabs.getByRole('button', { name: /^Select / })).toHaveCount(1);
+  await expect(page.locator('.workspace-tab-layer')).toHaveCount(1);
+});
+
 test('authenticates with the stored password, opens a PTY, reconnects, splits, and closes terminals', async ({ request }) => {
   await authenticateRequest(request);
 

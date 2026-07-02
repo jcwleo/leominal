@@ -351,6 +351,40 @@ function twoWorkspaceLayout(): TerminalLayoutState {
   };
 }
 
+function duplicateTabIdLayout(): TerminalLayoutState {
+  return {
+    activeWorkspaceId: 'workspace-default',
+    workspaces: [
+      {
+        id: 'workspace-default',
+        title: 'Leominal',
+        activeTabId: 'tab-dup',
+        tabs: [
+          {
+            id: 'tab-dup',
+            title: 'Ops',
+            activeTerminalId: 'term-alpha',
+            root: { type: 'pane', terminalId: 'term-alpha' }
+          }
+        ]
+      },
+      {
+        id: 'workspace-second',
+        title: 'Second',
+        activeTabId: 'tab-dup',
+        tabs: [
+          {
+            id: 'tab-dup',
+            title: 'Second',
+            activeTerminalId: 'term-beta',
+            root: { type: 'pane', terminalId: 'term-beta' }
+          }
+        ]
+      }
+    ]
+  };
+}
+
 describe('TerminalWorkspace', () => {
   afterEach(cleanup);
 
@@ -622,54 +656,95 @@ describe('TerminalWorkspace', () => {
     expect(within(tabs).queryByText('Created 1')).toBeNull();
   });
 
-  it("keeps every tab's pane layer mounted across tab switches", async () => {
+  it('does not mount never-visited tabs on initial load', async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha'), terminal('term-beta', 'Beta')]);
+    vi.mocked(api.getTerminalLayout).mockResolvedValue(serverLayout(twoTabLayout(), 4));
+
+    render(<TerminalWorkspace api={api} />);
+
+    const panes = await screen.findAllByTestId('split-pane');
+    expect(panes).toHaveLength(1);
+    const layer = panes[0]?.closest('.workspace-tab-layer');
+    expect(layer).toHaveAttribute('data-current', 'true');
+    expect(layer).toHaveAttribute('aria-hidden', 'false');
+  });
+
+  it('does not mount a never-visited tab that shares its id with a tab in another workspace', async () => {
+    const api = createApi([terminal('term-alpha', 'Alpha'), terminal('term-beta', 'Beta')]);
+    vi.mocked(api.getTerminalLayout).mockResolvedValue(serverLayout(duplicateTabIdLayout(), 4));
+
+    render(<TerminalWorkspace api={api} />);
+
+    const panes = await screen.findAllByTestId('split-pane');
+    expect(panes).toHaveLength(1);
+    expect(panes[0]).toHaveAttribute('data-active-terminal-id', 'term-alpha');
+  });
+
+  it("mounts a tab's layer on first visit and keeps it mounted after switching away", async () => {
     const api = createApi([terminal('term-alpha', 'Alpha'), terminal('term-beta', 'Beta')]);
     vi.mocked(api.getTerminalLayout).mockResolvedValue(serverLayout(twoTabLayout(), 4));
 
     render(<TerminalWorkspace api={api} />);
 
     const panesBefore = await screen.findAllByTestId('split-pane');
-    expect(panesBefore).toHaveLength(2);
-    const layersBefore = panesBefore.map((pane) => pane.closest('.workspace-tab-layer'));
-    expect(layersBefore.map((layer) => layer?.getAttribute('data-current'))).toEqual(['true', 'false']);
-    expect(layersBefore.map((layer) => layer?.getAttribute('aria-hidden'))).toEqual(['false', 'true']);
+    expect(panesBefore).toHaveLength(1);
 
     const tabs = screen.getByRole('navigation', { name: 'Terminal tabs' });
     fireEvent.click(within(tabs).getByRole('button', { name: 'Select Dev' }));
 
+    const panesVisited = screen.getAllByTestId('split-pane');
+    expect(panesVisited).toHaveLength(2);
+    expect(panesVisited[0]).toBe(panesBefore[0]);
+    expect(panesVisited.map((pane) => pane.closest('.workspace-tab-layer')?.getAttribute('data-current'))).toEqual([
+      'false',
+      'true'
+    ]);
+
+    fireEvent.click(within(tabs).getByRole('button', { name: 'Select Ops' }));
+
     const panesAfter = screen.getAllByTestId('split-pane');
     expect(panesAfter).toHaveLength(2);
-    expect(panesAfter[0]).toBe(panesBefore[0]);
-    expect(panesAfter[1]).toBe(panesBefore[1]);
+    expect(panesAfter[0]).toBe(panesVisited[0]);
+    expect(panesAfter[1]).toBe(panesVisited[1]);
     expect(panesAfter.map((pane) => pane.closest('.workspace-tab-layer')?.getAttribute('data-current'))).toEqual([
+      'true',
+      'false'
+    ]);
+    expect(panesAfter.map((pane) => pane.closest('.workspace-tab-layer')?.getAttribute('aria-hidden'))).toEqual([
       'false',
       'true'
     ]);
   });
 
-  it('keeps layers mounted across workspace switches', async () => {
+  it("mounts a workspace's layer on first visit and keeps it mounted across workspace switches", async () => {
     const api = createApi([terminal('term-alpha', 'Alpha'), terminal('term-beta', 'Beta')]);
     vi.mocked(api.getTerminalLayout).mockResolvedValue(serverLayout(twoWorkspaceLayout(), 4));
 
     render(<TerminalWorkspace api={api} />);
 
     const panesBefore = await screen.findAllByTestId('split-pane');
-    expect(panesBefore).toHaveLength(2);
-    expect(panesBefore.map((pane) => pane.closest('.workspace-tab-layer')?.getAttribute('data-current'))).toEqual([
-      'true',
-      'false'
-    ]);
+    expect(panesBefore).toHaveLength(1);
 
     const workspaces = screen.getByRole('navigation', { name: 'Workspaces' });
     fireEvent.click(within(workspaces).getByRole('button', { name: /^Second/ }));
 
-    const panesAfter = screen.getAllByTestId('split-pane');
-    expect(panesAfter).toHaveLength(2);
-    expect(panesAfter[0]).toBe(panesBefore[0]);
-    expect(panesAfter[1]).toBe(panesBefore[1]);
-    expect(panesAfter.map((pane) => pane.closest('.workspace-tab-layer')?.getAttribute('data-current'))).toEqual([
+    const panesVisited = screen.getAllByTestId('split-pane');
+    expect(panesVisited).toHaveLength(2);
+    expect(panesVisited[0]).toBe(panesBefore[0]);
+    expect(panesVisited.map((pane) => pane.closest('.workspace-tab-layer')?.getAttribute('data-current'))).toEqual([
       'false',
       'true'
+    ]);
+
+    fireEvent.click(within(workspaces).getByRole('button', { name: /^Leominal/ }));
+
+    const panesAfter = screen.getAllByTestId('split-pane');
+    expect(panesAfter).toHaveLength(2);
+    expect(panesAfter[0]).toBe(panesVisited[0]);
+    expect(panesAfter[1]).toBe(panesVisited[1]);
+    expect(panesAfter.map((pane) => pane.closest('.workspace-tab-layer')?.getAttribute('data-current'))).toEqual([
+      'true',
+      'false'
     ]);
   });
 
@@ -679,7 +754,12 @@ describe('TerminalWorkspace', () => {
 
     render(<TerminalWorkspace api={api} />);
 
-    const panes = await screen.findAllByTestId('split-pane');
+    await screen.findAllByTestId('split-pane');
+    const tabs = screen.getByRole('navigation', { name: 'Terminal tabs' });
+    fireEvent.click(within(tabs).getByRole('button', { name: 'Select Dev' }));
+    fireEvent.click(within(tabs).getByRole('button', { name: 'Select Ops' }));
+
+    const panes = screen.getAllByTestId('split-pane');
     expect(panes).toHaveLength(2);
     expect(panes[0]).toHaveAttribute('data-active-terminal-id', 'term-alpha');
     expect(panes[1]).toHaveAttribute('data-active-terminal-id', '');

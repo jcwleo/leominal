@@ -17,6 +17,7 @@ const xtermMocks = vi.hoisted(() => ({
     writeln: ReturnType<typeof vi.fn>;
     refresh: ReturnType<typeof vi.fn>;
     focus: ReturnType<typeof vi.fn>;
+    blur: ReturnType<typeof vi.fn>;
     scrollLines: ReturnType<typeof vi.fn>;
     dispose: ReturnType<typeof vi.fn>;
     options: Record<string, unknown>;
@@ -51,6 +52,7 @@ vi.mock('@xterm/xterm', () => ({
     writeln = vi.fn();
     refresh = vi.fn();
     focus = vi.fn();
+    blur = vi.fn();
     scrollLines = vi.fn();
     dispose = vi.fn();
     element: HTMLElement | undefined;
@@ -268,6 +270,28 @@ describe('XtermPane', () => {
     socket.receive({ type: 'terminal_updated', terminal: updated });
 
     expect(onSnapshot).toHaveBeenCalledWith(updated);
+  });
+
+  it('blurs the terminal when the pane becomes inactive', async () => {
+    const paneProps = (active: boolean) => (
+      <XtermPane
+        terminal={terminal()}
+        active={active}
+        onSelect={() => undefined}
+        onExit={() => undefined}
+        onSnapshot={vi.fn()}
+        canClose={false}
+        onClose={() => undefined}
+      />
+    );
+    const { rerender } = render(paneProps(true));
+    await openSocketAfterXtermReady();
+    const mockTerminal = xtermMocks.terminals[0];
+    expect(mockTerminal!.focus).toHaveBeenCalled();
+
+    rerender(paneProps(false));
+
+    expect(mockTerminal!.blur).toHaveBeenCalledOnce();
   });
 
   it('resets and pre-resizes to server dimensions before writing snapshot output', async () => {
