@@ -7,7 +7,7 @@
   text-size-adjust: 100%;
   -webkit-text-size-adjust: 100%;
   --leominal-viewport-height: 100vh;
-  --leominal-keyboard-inset-bottom: 0px;
+  --leominal-viewport-offset-top: 0px;
   --leominal-safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --leo-bg: #0a0d10;
   --leo-bg-2: #0d1216;
@@ -79,6 +79,14 @@ textarea {
   min-width: 0;
   resize: none;
   outline: none;
+}
+
+/* Follow the visual viewport when a soft keyboard pans it (offset published by
+   viewportHeight.ts). top (not transform): a transform would turn this into the
+   containing block for position:fixed descendants such as modals and backdrops. */
+#root {
+  position: relative;
+  top: var(--leominal-viewport-offset-top);
 }
 
 .terminal-shell {
@@ -1294,7 +1302,8 @@ textarea {
 .terminal-pane {
   position: relative;
   display: grid;
-  grid-template-rows: 26px minmax(0, 1fr);
+  /* header / xterm / mobile key bar (row collapses to 0 when the bar is hidden) */
+  grid-template-rows: 26px minmax(0, 1fr) auto;
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -1507,12 +1516,12 @@ textarea {
 
 .mobile-terminal-key {
   display: grid;
-  min-width: 34px;
+  min-width: 30px;
   height: 30px;
   place-items: center;
   border: 1px solid var(--leo-line-2);
   border-radius: 5px;
-  padding: 0 8px;
+  padding: 0 6px;
   color: var(--leo-fg-2);
   background: rgba(13, 18, 22, 0.94);
   font-family: var(--leo-font-mono);
@@ -2050,43 +2059,22 @@ h1 {
     opacity: 1;
   }
 
-  .terminal-pane[data-active="true"] .xterm-container {
-    padding-bottom: calc(46px + var(--leominal-safe-area-bottom));
-  }
-
   .mobile-terminal-key-bar {
-    position: absolute;
-    right: 8px;
-    bottom: max(8px, var(--leominal-safe-area-bottom));
-    left: 8px;
-    z-index: 10;
     display: flex;
-    max-width: calc(100% - 16px);
     align-items: center;
     justify-content: center;
     gap: 4px;
     overflow-x: auto;
     overscroll-behavior: contain;
-    border: 1px solid rgba(42, 51, 64, 0.85);
-    border-radius: 8px;
-    padding: 4px;
-    background: rgba(8, 9, 11, 0.86);
-    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+    border-top: 1px solid var(--leo-line);
+    padding: 3px 6px;
+    background: var(--leo-bg-2);
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
   }
 
   .mobile-terminal-key-bar::-webkit-scrollbar {
     display: none;
-  }
-
-  :root[data-leominal-keyboard-visible="true"] .terminal-pane[data-active="true"] .xterm-container {
-    padding-bottom: 3px;
-  }
-
-  :root[data-leominal-keyboard-visible="true"] .mobile-terminal-key-bar {
-    position: fixed;
-    bottom: calc(var(--leominal-keyboard-inset-bottom) + 4px);
   }
 
   .terminal-status-bar {

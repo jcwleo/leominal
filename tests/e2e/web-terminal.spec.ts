@@ -43,15 +43,28 @@ test('browser UI sets the initial password, creates split panes, refreshes, and 
   await expect(mobileKeyBar).toBeVisible();
   await expect(mobileKeyBar.getByRole('button', { name: 'Arm Control modifier' })).toBeVisible();
   await expect(mobileKeyBar.getByRole('button', { name: /command/i })).toHaveCount(0);
+  await expect(mobileKeyBar).toHaveCSS('position', 'static');
+  const activeXtermContainer = page.locator('.terminal-pane[data-active="true"] .xterm-container').first();
+  const [containerBox, keyBarBox] = await Promise.all([
+    activeXtermContainer.boundingBox(),
+    mobileKeyBar.boundingBox()
+  ]);
+  expect(containerBox).not.toBeNull();
+  expect(keyBarBox).not.toBeNull();
+  expect(containerBox!.y + containerBox!.height).toBeLessThanOrEqual(keyBarBox!.y + 0.5);
+  // Verifies the consumption side of --leominal-viewport-offset-top only: a real
+  // soft-keyboard visual-viewport pan (publish side) is not reproducible in Playwright.
+  const terminalShell = page.locator('.terminal-shell');
+  const shellBeforeOffset = await terminalShell.boundingBox();
   await page.evaluate(() => {
-    document.documentElement.style.setProperty('--leominal-keyboard-inset-bottom', '320px');
-    document.documentElement.setAttribute('data-leominal-keyboard-visible', 'true');
+    document.documentElement.style.setProperty('--leominal-viewport-offset-top', '40px');
   });
-  await expect(mobileKeyBar).toHaveCSS('position', 'fixed');
-  await expect(mobileKeyBar).toHaveCSS('bottom', '324px');
+  const shellAfterOffset = await terminalShell.boundingBox();
+  expect(shellBeforeOffset).not.toBeNull();
+  expect(shellAfterOffset).not.toBeNull();
+  expect(shellAfterOffset!.y - shellBeforeOffset!.y).toBeCloseTo(40, 0);
   await page.evaluate(() => {
-    document.documentElement.style.removeProperty('--leominal-keyboard-inset-bottom');
-    document.documentElement.removeAttribute('data-leominal-keyboard-visible');
+    document.documentElement.style.removeProperty('--leominal-viewport-offset-top');
   });
   await page.setViewportSize({ width: 1280, height: 720 });
 

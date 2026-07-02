@@ -13,8 +13,7 @@ vi.mock('../../src/client/App.js', () => ({
 
 const originalVisualViewport = Object.getOwnPropertyDescriptor(window, 'visualViewport');
 const viewportHeightProperty = '--leominal-viewport-height';
-const keyboardVisibleAttribute = 'data-leominal-keyboard-visible';
-const keyboardInsetBottomProperty = '--leominal-keyboard-inset-bottom';
+const viewportOffsetTopProperty = '--leominal-viewport-offset-top';
 
 describe('client viewport height sync', () => {
   let visualViewport: EventTarget;
@@ -26,8 +25,7 @@ describe('client viewport height sync', () => {
     rootRender.mockClear();
     document.body.innerHTML = '<div id="root"></div>';
     document.documentElement.style.removeProperty(viewportHeightProperty);
-    document.documentElement.style.removeProperty(keyboardInsetBottomProperty);
-    document.documentElement.removeAttribute(keyboardVisibleAttribute);
+    document.documentElement.style.removeProperty(viewportOffsetTopProperty);
     visualViewport = new EventTarget();
     visualViewportHeight = 744;
     visualViewportOffsetTop = 0;
@@ -47,8 +45,7 @@ describe('client viewport height sync', () => {
 
   afterEach(() => {
     document.documentElement.style.removeProperty(viewportHeightProperty);
-    document.documentElement.style.removeProperty(keyboardInsetBottomProperty);
-    document.documentElement.removeAttribute(keyboardVisibleAttribute);
+    document.documentElement.style.removeProperty(viewportOffsetTopProperty);
     if (originalVisualViewport) {
       Object.defineProperty(window, 'visualViewport', originalVisualViewport);
     } else {
@@ -78,39 +75,26 @@ describe('client viewport height sync', () => {
     expect(document.documentElement.style.getPropertyValue(viewportHeightProperty)).toBe('681px');
   });
 
-  it('marks the document when the visual viewport is shortened by the keyboard', async () => {
-    Object.defineProperty(window, 'innerHeight', {
-      configurable: true,
-      value: 844
-    });
-    visualViewportHeight = 520;
-
-    await import('../../src/client/main.js');
-
-    expect(document.documentElement.getAttribute(keyboardVisibleAttribute)).toBe('true');
-
-    visualViewportHeight = 830;
-    visualViewport.dispatchEvent(new Event('resize'));
-
-    expect(document.documentElement.getAttribute(keyboardVisibleAttribute)).toBe('false');
-  });
-
-  it('exposes the keyboard-covered bottom inset for fixed mobile controls', async () => {
-    Object.defineProperty(window, 'innerHeight', {
-      configurable: true,
-      value: 844
-    });
-    visualViewportHeight = 520;
+  it('exposes the visual viewport pan offset so the layout can stay aligned above the keyboard', async () => {
     visualViewportOffsetTop = 12;
 
     await import('../../src/client/main.js');
 
-    expect(document.documentElement.style.getPropertyValue(keyboardInsetBottomProperty)).toBe('312px');
+    expect(document.documentElement.style.getPropertyValue(viewportOffsetTopProperty)).toBe('12px');
 
-    visualViewportHeight = 830;
-    visualViewportOffsetTop = 0;
+    visualViewportOffsetTop = 48;
+    visualViewport.dispatchEvent(new Event('scroll'));
+
+    expect(document.documentElement.style.getPropertyValue(viewportOffsetTopProperty)).toBe('48px');
+
+    visualViewportOffsetTop = -8;
+    visualViewport.dispatchEvent(new Event('scroll'));
+
+    expect(document.documentElement.style.getPropertyValue(viewportOffsetTopProperty)).toBe('0px');
+
+    visualViewportOffsetTop = 20;
     visualViewport.dispatchEvent(new Event('resize'));
 
-    expect(document.documentElement.style.getPropertyValue(keyboardInsetBottomProperty)).toBe('14px');
+    expect(document.documentElement.style.getPropertyValue(viewportOffsetTopProperty)).toBe('20px');
   });
 });
